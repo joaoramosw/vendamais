@@ -1,14 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://localhost:3001/:path*",
-      },
-    ];
-  },
+  /**
+   * pdfkit e exceljs (rota /api/cotacoes/[id]/export) não sobrevivem ao
+   * bundling do build — pdfkit lê os arquivos de fonte .afm do próprio
+   * node_modules em runtime. Externalizados, o file tracing da Vercel leva
+   * os pacotes inteiros junto da função.
+   */
+  serverExternalPackages: ["pdfkit", "exceljs"],
   images: {
     /**
      * remotePatterns é o padrão atual recomendado (Next.js 13+).

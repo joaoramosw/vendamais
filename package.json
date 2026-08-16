@@ -4,12 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:backend": "npm --prefix backend run start:dev",
-    "dev:all": "concurrently -n next,api -c blue,magenta \"npm run dev\" \"npm run dev:backend\"",
-    "prebuild": "node scripts/ensure-ngrok.mjs",
+    "dev:tunnel": "node scripts/ensure-ngrok.mjs && ngrok http 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/server/propostas/ranking-por-item.util.test.ts src/server/propostas/convite-itens.util.test.ts src/lib/margem.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -25,15 +25,18 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "exceljs": "^4.4.0",
     "framer-motion": "^12.34.5",
     "lucide-react": "^0.575.0",
     "next": "16.1.6",
+    "pdfkit": "^0.19.1",
     "pg": "^8.20.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-hook-form": "^7.72.1",
     "react-intersection-observer": "^10.0.3",
     "recharts": "^3.10.1",
+    "server-only": "^0.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "zod": "^4.3.6"
@@ -41,13 +44,14 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pdfkit": "^0.17.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "concurrently": "^10.0.3",
     "dotenv": "^17.4.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }

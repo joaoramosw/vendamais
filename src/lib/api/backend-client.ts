@@ -2,7 +2,11 @@
 
 import { createClient } from "@/lib/supabase/client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+// A API é servida pela própria aplicação em /api (route handlers do Next) —
+// caminho relativo funciona em qualquer origem: localhost, preview e
+// produção. O fallback antigo (http://localhost:3001) apontava pro backend
+// NestJS separado, que não existe mais.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 const REQUEST_TIMEOUT_MS = 15_000;
 
 function extractMessage(body: unknown): string {

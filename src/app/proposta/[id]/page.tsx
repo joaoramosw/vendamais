@@ -1,11 +1,13 @@
 import { AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserOrNull } from "@/lib/auth/current-user";
 import { AcessoGate } from "@/components/proposta/AcessoGate";
 import { Logo } from "@/components/brand/logo";
 import { propostaPath } from "@/lib/routes";
+import { HttpException } from "@/server/http";
+import { getAuthenticatedUserByToken } from "@/server/auth";
+import { acessarComoUsuario, getConvite } from "@/server/propostas/propostas.service";
 import { PropostaForm } from "./PropostaForm";
 
 /**
@@ -56,36 +58,25 @@ interface ConviteData {
 }
 
 /**
- * Base da API para fetch **do servidor**. Com `NEXT_PUBLIC_API_URL` relativo
- * (ex.: "/api"), resolve contra o host da requisição para passar pelo rewrite
- * do next.config — funciona em localhost e via ngrok.
+ * A API agora vive no mesmo processo (src/server/**) — este server component
+ * chama os services direto, sem fetch pra própria origem. Além de mais
+ * rápido, isso funciona em preview da Vercel mesmo com Deployment Protection
+ * ligada (um self-fetch seria barrado pela tela de autenticação da Vercel).
+ * O contrato de erro se mantém: HttpException carrega a mesma mensagem que a
+ * rota HTTP devolveria em `message`.
  */
-async function apiBaseUrl(): Promise<string> {
-  const apiPath = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-  if (!apiPath.startsWith("/")) return apiPath;
-
-  const h = await headers();
-  const host = h.get("host") ?? "localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? "http";
-  return `${proto}://${host}${apiPath}`;
+function mensagemDe(error: unknown, fallback: string): string {
+  return error instanceof HttpException ? error.message : fallback;
 }
 
 async function getConvitePublico(
   identificador: string,
 ): Promise<{ data?: ConviteData; error?: string }> {
   try {
-    const res = await fetch(`${await apiBaseUrl()}/convite/${identificador}`, {
-      cache: "no-store",
-    });
-    const body = await res.json().catch(() => null);
-
-    if (!res.ok) {
-      return { error: body?.message ?? "Convite não encontrado." };
-    }
-
-    return { data: body as ConviteData };
-  } catch {
-    return { error: "Não foi possível carregar o convite. Tente novamente." };
+    const data = (await getConvite(identificador)) as ConviteData;
+    return { data };
+  } catch (error) {
+    return { error: mensagemDe(error, "Não foi possível carregar o convite. Tente novamente.") };
   }
 }
 
@@ -96,20 +87,15 @@ async function getConviteComoUsuario(
   accessToken: string,
 ): Promise<{ data?: ConviteData; error?: string }> {
   try {
-    const res = await fetch(`${await apiBaseUrl()}/convite/${identificador}/acesso`, {
-      method: "POST",
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const body = await res.json().catch(() => null);
-
-    if (!res.ok) {
-      return { error: body?.message ?? "Não foi possível abrir esta cotação." };
-    }
-
-    return { data: body as ConviteData };
-  } catch {
-    return { error: "Não foi possível carregar o convite. Tente novamente." };
+    const user = await getAuthenticatedUserByToken(accessToken);
+    const data = (await acessarComoUsuario(identificador, {
+      email: user.email,
+      whatsapp: user.whatsapp,
+      nomeEmpresa: user.nomeEmpresa,
+    })) as ConviteData;
+    return { data };
+  } catch (error) {
+    return { error: mensagemDe(error, "Não foi possível carregar o convite. Tente novamente.") };
   }
 }
 
