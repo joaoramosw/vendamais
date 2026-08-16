@@ -1,0 +1,22 @@
+-- =============================================================================
+-- 023: propostas.observacao — "Observações gerais" da proposta
+--
+-- A tela do fornecedor (/proposta/[id]) passou a ter, abaixo da listagem de
+-- produtos, dois campos que valem para a proposta inteira: **Prazo de entrega**
+-- (já existia em `propostas.prazo_entrega`) e **Observações gerais**, que não
+-- tinha onde ser gravada — `propostas` não tem coluna de observação no banco
+-- real (confirmado ao vivo pelo schema OpenAPI do PostgREST em 15/08/2026;
+-- `src/lib/types/database.ts` mostrava uma, mas aquele tipo está desatualizado,
+-- como avisa o alerta no topo do CLAUDE.md).
+--
+-- Não confundir com `proposta_itens.observacao`, que é a ressalva do fornecedor
+-- **para um produto específico** e continua existindo.
+--
+-- ⚠️ Enquanto esta migration NÃO for rodada no SQL Editor do Supabase, o envio
+-- da proposta continua funcionando: o backend detecta a ausência da coluna
+-- (PropostasService#observacaoGeralDisponivel, cache com re-teste a cada 60s)
+-- e grava a proposta sem ela, avisando a UI por `observacao_geral_suportada`.
+-- Rodar o arquivo destrava a gravação sem nenhuma mudança de código.
+-- =============================================================================
+
+ALTER TABLE propostas ADD COLUMN IF NOT EXISTS observacao text;

@@ -1,11 +1,60 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { landingPathForRole } from '@/lib/routes'
+import type { RoleKey } from '@/lib/types/database'
 
-export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  })
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
 
+const AUTH_PAGES = ['/login', '/cadastro'] as const
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers (no I/O)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isAuthPage(pathname: string): boolean {
+  return AUTH_PAGES.some((p) => pathname.startsWith(p))
+}
+
+/**
+ * Compara por **segmento inteiro**, não por prefixo de texto.
+ *
+ * `startsWith('/fornecedor')` casava também com `/fornecedores` — a landing
+ * pública de fornecedores — e mandava todo visitante deslogado dessa página
+ * para o /login (confirmado ao vivo: respondia 307 → /login). Prefixo cru volta
+ * a criar esse problema a cada rota nova que comece com o mesmo texto.
+ */
+function isRouteGroup(pathname: string, base: string): boolean {
+  return pathname === base || pathname.startsWith(`${base}/`)
+}
+
+function isEmpresarioRoute(pathname: string): boolean {
+  return isRouteGroup(pathname, '/empresario')
+}
+
+function isFornecedorRoute(pathname: string): boolean {
+  return isRouteGroup(pathname, '/fornecedor')
+}
+
+function isProtectedRoute(pathname: string): boolean {
+  return isEmpresarioRoute(pathname) || isFornecedorRoute(pathname)
+}
+
+function redirectTo(request: NextRequest, path: string): NextResponse {
+  const url = request.nextUrl.clone()
+  url.pathname = path
+  return NextResponse.redirect(url)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main middleware
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function updateSession(request: NextRequest): Promise<NextResponse> {
+  let supabaseResponse = NextResponse.next({ request })
+
+  // ── 1. Initialise Supabase with cookie passthrough ──
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -15,12 +64,8 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          )
-          supabaseResponse = NextResponse.next({
-            request,
-          })
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -29,72 +74,40 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
+  // ── 2. Refresh session ──
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protected routes
-  const isProtectedRoute =
-    request.nextUrl.pathname.startsWith('/empresario') ||
-    request.nextUrl.pathname.startsWith('/fornecedor')
+  const pathname = request.nextUrl.pathname
 
-  if (isProtectedRoute && !user) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+  // ── 3. Unauthenticated → redirect to /login ──
+  if (isProtectedRoute(pathname) && !user) {
+    return redirectTo(request, '/login')
   }
 
-  // Redirect logged-in users away from auth pages
-  const isAuthPage = ['/login', '/cadastro', '/esqueci-senha'].some((p) =>
-    request.nextUrl.pathname.startsWith(p)
-  )
-
-  if (isAuthPage && user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('tipo')
+  // ── 4. Authenticated user visiting an auth page (/login etc.) ──
+  // Role is only resolved here — this is a rare path (not the dashboard
+  // navigation hot path), so the extra query doesn't affect perceived speed.
+  // The cross-domain guard and impersonation header used to live here too,
+  // but both became redundant once (dashboard)/layout.tsx started doing the
+  // same checks for free (it already has `role` from the cached
+  // getCurrentUser() call) — removing them here cuts a Supabase round-trip
+  // from every dashboard navigation.
+  if (user && isAuthPage(pathname)) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('roles(key)')
       .eq('id', user.id)
-      .single()
+      .maybeSingle()
 
-    const dashboardPath =
-      profile?.tipo === 'fornecedor'
-        ? '/fornecedor/dashboard'
-        : '/empresario/dashboard'
+    const roleKey = (userRow as unknown as { roles: { key: string } | null })?.roles?.key
+    const role: RoleKey = roleKey === 'admin' ? 'admin' : 'supplier'
 
-    const url = request.nextUrl.clone()
-    url.pathname = dashboardPath
-    return NextResponse.redirect(url)
-  }
-
-  // Fase 1 + 1.5 — Injetar org_id no header, com suporte a impersonação segura
-  if (user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('active_organization_id, global_role')
-      .eq('id', user.id)
-      .single()
-
-    // Impersonação: super_admin com cookie acting_as_org_id sobrescreve x-org-id
-    // sem alterar o banco — apenas o contexto da request atual
-    const actingAsOrgId = request.cookies.get('acting_as_org_id')?.value
-    const isSuperAdmin = profile?.global_role === 'super_admin'
-
-    if (isSuperAdmin && actingAsOrgId) {
-      // Modo impersonação ativo: usa a org do cookie
-      supabaseResponse.headers.set('x-org-id', actingAsOrgId)
-      supabaseResponse.headers.set('x-impersonating', 'true')
-    } else if (profile?.active_organization_id) {
-      // Modo normal: usa a org ativa do banco
-      supabaseResponse.headers.set('x-org-id', profile.active_organization_id)
-    }
-
-    // Sempre informa se é super_admin para os layouts
-    if (isSuperAdmin) {
-      supabaseResponse.headers.set('x-is-super-admin', 'true')
-    }
+    // Fornecedor cai em "Cotações Ativas" (o Dashboard dele está desativado —
+    // ver src/lib/routes.ts).
+    return redirectTo(request, landingPathForRole(role))
   }
 
   return supabaseResponse
 }
-
-

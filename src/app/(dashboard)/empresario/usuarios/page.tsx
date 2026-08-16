@@ -1,31 +1,19 @@
 import { listAllUsers } from '@/actions/admin-users'
+import { getSegmentos } from '@/actions/fornecedor-segmentos'
 import { InviteUserModal } from '@/components/usuarios/InviteUserModal'
 import { UsersTable } from '@/components/usuarios/UsersTable'
-import { createClient } from '@/lib/supabase/server'
+import { requirePermission } from '@/lib/auth/guard'
 import { ShieldCheck, Users } from 'lucide-react'
-import { redirect } from 'next/navigation'
 
 export const metadata = {
   title: 'Gestão de Usuários — Venda Mais',
 }
 
 export default async function UsuariosPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  // Guard: somente super_admin acessa esta página
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('global_role, nome')
-    .eq('id', user.id)
-    .single()
-
-  if (profile?.global_role !== 'super_admin') {
-    redirect('/empresario/dashboard')
-  }
+  const user = await requirePermission('users.read')
 
   const { users, error } = await listAllUsers()
+  const { segmentos } = await getSegmentos()
 
   return (
     <div className="space-y-6">
@@ -33,13 +21,13 @@ export default async function UsuariosPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <div className="h-8 w-8 rounded-lg bg-amber-500/15 flex items-center justify-center">
-              <ShieldCheck className="h-4.5 w-4.5 text-amber-400" />
+            <div className="h-8 w-8 rounded-lg bg-warning-500/15 flex items-center justify-center">
+              <ShieldCheck className="h-4.5 w-4.5 text-warning-400" />
             </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Gestão de Usuários</h1>
+            <h1 className="text-2xl font-bold text-neutral-900 dark:text-white tracking-tight">Gestão de Usuários</h1>
           </div>
-          <p className="text-sm text-gray-500 ml-10">
-            Área exclusiva para super administradores — gerencie papéis, convites e acessos.
+          <p className="text-sm text-neutral-500 ml-10">
+            Gerencie papéis, convites e acessos dos usuários.
           </p>
         </div>
         <InviteUserModal />
@@ -51,26 +39,20 @@ export default async function UsuariosPage() {
           {
             label: 'Total de usuários',
             value: users.length,
-            color: 'text-indigo-400',
-            bg: 'bg-indigo-500/10',
+            color: 'text-primary-400',
+            bg: 'bg-primary-500/10',
           },
           {
-            label: 'Empresários',
-            value: users.filter(u => u.tipo === 'empresario').length,
+            label: 'Administradores',
+            value: users.filter(u => u.role === 'admin').length,
             color: 'text-violet-400',
             bg: 'bg-violet-500/10',
           },
           {
             label: 'Fornecedores',
-            value: users.filter(u => u.tipo === 'fornecedor').length,
+            value: users.filter(u => u.role === 'supplier').length,
             color: 'text-teal-400',
             bg: 'bg-teal-500/10',
-          },
-          {
-            label: 'Super Admins',
-            value: users.filter(u => u.global_role === 'super_admin').length,
-            color: 'text-amber-400',
-            bg: 'bg-amber-500/10',
           },
         ].map(({ label, value, color, bg }) => (
           <div
@@ -80,7 +62,7 @@ export default async function UsuariosPage() {
             <Users className={`h-4 w-4 ${color} shrink-0`} />
             <div>
               <p className={`text-lg font-bold ${color}`}>{value}</p>
-              <p className="text-[11px] text-gray-500">{label}</p>
+              <p className="text-[11px] text-neutral-500">{label}</p>
             </div>
           </div>
         ))}
@@ -88,13 +70,13 @@ export default async function UsuariosPage() {
 
       {/* Error state */}
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-5 py-4 text-sm text-red-400">
+        <div className="bg-danger-500/10 border border-danger-500/20 rounded-xl px-5 py-4 text-sm text-danger-400">
           Erro ao carregar usuários: {error}
         </div>
       )}
 
       {/* Table */}
-      {!error && <UsersTable users={users} />}
+      {!error && <UsersTable users={users} segmentos={segmentos} />}
     </div>
   )
 }

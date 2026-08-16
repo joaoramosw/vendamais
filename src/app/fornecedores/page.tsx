@@ -1,6 +1,8 @@
+import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
-import { CheckCircle2, Search, Shield, Star, Zap } from "lucide-react";
+import { waMeUrl } from "@/lib/whatsapp";
+import { CheckCircle2, Search, Shield, Star } from "lucide-react";
 import Link from "next/link";
 
 export default function FornecedoresLandingPage() {
@@ -10,12 +12,15 @@ export default function FornecedoresLandingPage() {
       <header className="border-b border-neutral-100 py-6">
         <nav className="max-w-7xl mx-auto px-6 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <Zap className="h-8 w-8 text-primary-500" />
-            <span className="text-xl font-black text-neutral-900 tracking-tighter">Venda Mais</span>
+            <Logo variant="full" scheme="light" size="lg" priority />
           </Link>
-          <Link href="/cadastro">
+          <a
+            href={waMeUrl("Olá! Quero cadastrar minha empresa como fornecedor na VendaMais.")}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             <Button size="sm" className="font-bold">Começar agora</Button>
-          </Link>
+          </a>
         </nav>
       </header>
 
@@ -32,11 +37,15 @@ export default function FornecedoresLandingPage() {
               Tenha acesso direto a cotações de redes de mercados e empresários qualificados. Venda mais, com menos esforço comercial.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-              <Link href="/cadastro">
+              <a
+                href={waMeUrl("Olá! Quero cadastrar minha empresa como fornecedor na VendaMais.")}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <Button size="lg" className="h-14 px-10 text-lg shadow-xl shadow-primary-500/20 w-full sm:w-auto">
                   Cadastrar minha Empresa
                 </Button>
-              </Link>
+              </a>
             </div>
           </div>
 
@@ -108,9 +117,13 @@ export default function FornecedoresLandingPage() {
       <footer className="bg-neutral-50 py-12 mt-20 border-t border-neutral-100">
          <div className="max-w-7xl mx-auto px-6 flex flex-col items-center gap-6">
             <p className="text-neutral-500 font-bold">Pronto para vender mais?</p>
-            <Link href="/cadastro">
+            <a
+              href={waMeUrl("Olá! Quero cadastrar minha empresa como fornecedor na VendaMais.")}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               <Button className="px-12 h-14 font-black">Quero me Cadastrar</Button>
-            </Link>
+            </a>
          </div>
       </footer>
     </div>

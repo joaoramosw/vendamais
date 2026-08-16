@@ -1,0 +1,35 @@
+{
+  "name": "vendamais-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend NestJS/Fastify para o dominio cotacoes/propostas do VendaMais",
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:prod": "node dist/main.js",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-fastify": "^11.1.6",
+    "@supabase/supabase-js": "^2.97.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.2.1",
+    "pdfkit": "^0.19.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.6",
+    "@types/node": "^20",
+    "@types/pdfkit": "^0.17.6",
+    "tsx": "^4.23.5",
+    "typescript": "^5.6.0"
+  }
+}

@@ -104,12 +104,12 @@ export function BatchAddModal({
     <Modal open={open} onClose={handleClose} className="max-w-2xl">
       <ModalHeader onClose={handleClose}>Adicionar Produtos em Lote</ModalHeader>
       <ModalBody className="space-y-4">
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-neutral-400">
           Preencha os dados para cadastrar múltiplos produtos de uma vez.
         </p>
 
         {/* Table header */}
-        <div className="grid grid-cols-[1fr_1fr_1fr_40px] gap-2 text-xs font-medium text-gray-400 px-1">
+        <div className="grid grid-cols-[1fr_1fr_1fr_40px] gap-2 text-xs font-medium text-neutral-400 px-1">
           <span>Nome *</span>
           <span>Categoria</span>
           <span>Cód. Barras</span>
@@ -142,7 +142,7 @@ export function BatchAddModal({
               <button
                 onClick={() => removeRow(index)}
                 disabled={rows.length <= 1}
-                className="p-1.5 rounded-[var(--radius-md)] text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-[var(--radius-md)] text-neutral-500 hover:text-danger-400 hover:bg-danger-500/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                 title="Remover linha"
               >
                 <Trash2 className="h-4 w-4" />
@@ -163,7 +163,7 @@ export function BatchAddModal({
           variant="ghost"
           size="sm"
           onClick={addRow}
-          className="text-indigo-400"
+          className="text-primary-400"
         >
           <Plus className="h-4 w-4" />
           Adicionar linha
@@ -171,7 +171,7 @@ export function BatchAddModal({
 
         {/* Future import tab placeholder */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-white/[0.03] border border-white/[0.06]">
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-neutral-500">
             📥 Importação via arquivo — em breve
           </span>
         </div>

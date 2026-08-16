@@ -48,15 +48,15 @@ export function DashboardCard({
     <Link href={href} className={cn("block group", delayClass)}>
       <div
         className={cn(
-          "relative overflow-hidden rounded-2xl border border-white/[0.06] p-6",
-          "bg-[#1F2937] hover:bg-[#273449]",
+          "relative overflow-hidden rounded-2xl border border-neutral-200 dark:border-white/[0.06] p-6",
+          "bg-white dark:bg-neutral-800 hover:bg-white dark:hover:bg-neutral-800",
           "cursor-pointer transition-all duration-300",
-          "hover:scale-[1.03] hover:shadow-lg hover:shadow-indigo-500/10",
-          "hover:border-indigo-500/30"
+          "hover:scale-[1.03] hover:shadow-lg hover:shadow-primary-500/10",
+          "hover:border-primary-500/30"
         )}
       >
         {/* Subtle glow on hover */}
-        <div className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-indigo-500/5 via-transparent to-transparent" />
+        <div className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br from-primary-500/5 via-transparent to-transparent" />
 
         <div className="relative z-10 flex items-center gap-4">
           <div
@@ -70,10 +70,10 @@ export function DashboardCard({
             <Icon className="h-6 w-6" />
           </div>
           <div>
-            <p className="text-3xl font-black text-white leading-none mb-1 tabular-nums">
+            <p className="text-3xl font-black text-neutral-900 dark:text-white leading-none mb-1 tabular-nums">
               {value}
             </p>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            <p className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
               {label}
             </p>
           </div>

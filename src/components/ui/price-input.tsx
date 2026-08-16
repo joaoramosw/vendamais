@@ -52,7 +52,7 @@ export const PriceInput = forwardRef<HTMLInputElement, PriceInputProps>(
             "placeholder:text-neutral-400 dark:placeholder:text-neutral-500",
             "focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400",
             "outline-none transition-all",
-            error ? "border-red-400 focus:ring-red-400/20" : "",
+            error ? "border-danger-400 focus:ring-danger-400/20" : "",
             className ?? "",
           ]
             .filter(Boolean)
@@ -60,7 +60,7 @@ export const PriceInput = forwardRef<HTMLInputElement, PriceInputProps>(
           {...props}
         />
         {error && (
-          <p className="text-xs text-red-500 dark:text-red-400">{error}</p>
+          <p className="text-xs text-danger-500 dark:text-danger-400">{error}</p>
         )}
       </div>
     );

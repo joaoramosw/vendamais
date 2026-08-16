@@ -1,6 +1,8 @@
 'use server'
 
+import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { emailExibivel } from '@/lib/convite-contato'
 import { redirect } from 'next/navigation'
 
 // ── Types ──
@@ -33,8 +35,11 @@ export interface EmpresarioDashboardData {
   chartData: ChartDataPoint[]
   recentActivity: ActivityItem[]
   cotacoesAbertas: number
+  cotacoesFechadas: number
+  totalItensCotacoes: number
   totalProdutos: number
   totalCategorias: number
+  totalSegmentos: number
 }
 
 export interface FornecedorDashboardData {
@@ -43,6 +48,18 @@ export interface FornecedorDashboardData {
   chartData: ChartDataPoint[]
   recentActivity: ActivityItem[]
   cotacoesDisponiveis: number
+  propostasStatusCounts: {
+    pendente: number
+    aceita: number
+    recusada: number
+  }
+  propostasResumo: Array<{
+    id: string
+    status: string
+    valor_total: number | null
+    created_at: string
+    cotacao_titulo: string | null
+  }>
 }
 
 // ── Helpers ──
@@ -64,6 +81,20 @@ function getDateNDaysAgo(n: number): string {
   return d.toISOString().split('T')[0]
 }
 
+// fornecedores_convidados.whatsapp guarda o texto livre digitado em
+// PropostaForm.tsx (não normalizado, ao contrário de users.whatsapp) — o
+// vínculo por telefone só compara os últimos 9 dígitos (DDD + número) via
+// ilike, pra tolerar formatação diferente ("(71) 99999-9999" vs dígitos puros).
+function buildFornecedorOrFilter(email: string, whatsapp: string | null): string {
+  const emailNormalized = email.trim().toLowerCase()
+  const parts = [`email_contato.eq.${emailNormalized}`]
+  const digits = whatsapp ? whatsapp.replace(/\D/g, '') : ''
+  if (digits.length >= 9) {
+    parts.push(`whatsapp.ilike.%${digits.slice(-9)}%`)
+  }
+  return parts.join(',')
+}
+
 // ── Empresário Dashboard ──
 
 export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData> {
@@ -74,48 +105,87 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('profiles')
-    .select('nome')
+    .from('users')
+    .select('nome, active_organization_id')
     .eq('id', user.id)
     .single()
 
+  const adminClient = createAdminClient()
+  const productCountQuery = adminClient.from('products').select('*', { count: 'exact', head: true })
+  const categoryCountQuery = adminClient
+    .from('categories')
+    .select('*', { count: 'exact', head: true })
+
+  // Mesma fonte de verdade das telas de listagem: tudo que está visível filtra
+  // deleted_at IS NULL (soft delete, migration 012) — sem isso os cards contam
+  // também os registros excluídos.
+  const scopedProductCountQuery = profile?.active_organization_id
+    ? productCountQuery.or(
+        `organization_id.eq.${profile.active_organization_id},organization_id.is.null`
+      ).is('deleted_at', null)
+    : productCountQuery.is('organization_id', null).is('deleted_at', null)
+
+  const scopedCategoryCountQuery = profile?.active_organization_id
+    ? categoryCountQuery.or(
+        `organization_id.eq.${profile.active_organization_id},organization_id.is.null`
+      ).is('deleted_at', null)
+    : categoryCountQuery.is('organization_id', null).is('deleted_at', null)
+
   // Stats
-  const [totalCotacoesRes, cotacoesAbertasRes, totalPropostasRes, totalProdutosRes, totalCategoriasRes] = await Promise.all([
+  const [totalCotacoesRes, cotacoesAbertasRes, cotacoesFechadasRes, totalPropostasRes, totalProdutosRes, totalCategoriasRes, totalSegmentosRes, cotacaoIdsRes] = await Promise.all([
     supabase
       .from('cotacoes')
       .select('*', { count: 'exact', head: true })
-      .eq('empresario_id', user.id),
+      .eq('admin_id', user.id),
     supabase
       .from('cotacoes')
       .select('*', { count: 'exact', head: true })
-      .eq('empresario_id', user.id)
+      .eq('admin_id', user.id)
       .eq('status', 'aberta'),
     supabase
+      .from('cotacoes')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', user.id)
+      .eq('status', 'fechada'),
+    // propostas.cotacao_id -> cotacoes.id é FK real, esse embed funciona
+    // (ao contrário de qualquer embed envolvendo fornecedor_id/profiles).
+    supabase
       .from('propostas')
-      .select('*, cotacoes!inner(empresario_id)', { count: 'exact', head: true })
-      .eq('cotacoes.empresario_id', user.id),
-    supabase
-      .from('produtos')
-      .select('*', { count: 'exact', head: true })
-      .eq('empresario_id', user.id),
-    supabase
-      .from('categorias')
-      .select('*', { count: 'exact', head: true })
-      .eq('empresario_id', user.id),
+      .select('*, cotacoes!inner(admin_id)', { count: 'exact', head: true })
+      .eq('cotacoes.admin_id', user.id),
+    scopedProductCountQuery,
+    scopedCategoryCountQuery,
+    adminClient.from('segmentos').select('*', { count: 'exact', head: true }).is('deleted_at', null),
+    // cotacoes <-> cotacao_itens não tem embed reconhecido pelo PostgREST
+    // (ver CLAUDE.md) — conta itens em 2 passos: ids das cotações do admin,
+    // depois count direto em cotacao_itens filtrado por esses ids.
+    supabase.from('cotacoes').select('id').eq('admin_id', user.id),
   ])
+
+  const totalSegmentos = totalSegmentosRes.count ?? 0
 
   const totalCotacoes = totalCotacoesRes.count ?? 0
   const cotacoesAbertas = cotacoesAbertasRes.count ?? 0
+  const cotacoesFechadas = cotacoesFechadasRes.count ?? 0
   const totalPropostas = totalPropostasRes.count ?? 0
   const totalProdutos = totalProdutosRes.count ?? 0
   const totalCategorias = totalCategoriasRes.count ?? 0
+
+  const cotacaoIds = (cotacaoIdsRes.data || []).map((c) => c.id)
+  const totalItensCotacoesRes = cotacaoIds.length > 0
+    ? await supabase
+        .from('cotacao_itens')
+        .select('*', { count: 'exact', head: true })
+        .in('cotacao_id', cotacaoIds)
+    : null
+  const totalItensCotacoes = totalItensCotacoesRes?.count ?? 0
 
   // Chart - cotações per day (last 7 days)
   const sevenDaysAgo = getDateNDaysAgo(7)
   const { data: recentCotacoes } = await supabase
     .from('cotacoes')
     .select('created_at')
-    .eq('empresario_id', user.id)
+    .eq('admin_id', user.id)
     .gte('created_at', sevenDaysAgo)
     .order('created_at', { ascending: true })
 
@@ -136,12 +206,12 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
   const { data: recentCotacoesActivity } = await supabase
     .from('cotacoes')
     .select('id, titulo, created_at, status')
-    .eq('empresario_id', user.id)
+    .eq('admin_id', user.id)
     .order('created_at', { ascending: false })
     .limit(5)
 
   for (const c of recentCotacoesActivity || []) {
-    if (c.status === 'encerrada') {
+    if (c.status === 'fechada') {
       activity.push({
         id: `cotacao-enc-${c.id}`,
         type: 'cotacao_encerrada',
@@ -160,10 +230,15 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
     }
   }
 
+  // fornecedores_convidados.email_contato é a única identificação disponível
+  // pro fornecedor (sem conta vinculada, ver CLAUDE.md/plano desta sessão) —
+  // profiles:fornecedor_id não existe no schema real.
   const { data: recentPropostas } = await supabase
     .from('propostas')
-    .select('id, created_at, cotacoes!inner(titulo, empresario_id), profiles:fornecedor_id(nome)')
-    .eq('cotacoes.empresario_id', user.id)
+    .select(
+      'id, created_at, cotacoes!inner(titulo, admin_id), fornecedores_convidados(email_contato, whatsapp, nome_empresa)'
+    )
+    .eq('cotacoes.admin_id', user.id)
     .order('created_at', { ascending: false })
     .limit(5)
 
@@ -171,13 +246,25 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
     id: string
     created_at: string
     cotacoes: { titulo: string }
-    profiles: { nome: string }
+    fornecedores_convidados: {
+      email_contato: string | null
+      whatsapp: string | null
+      nome_empresa: string | null
+    } | null
   }>) || []) {
+    const convidado = p.fornecedores_convidados
+    // email_contato pode ser a sentinela do convite só-WhatsApp — nunca exibir.
+    const quem =
+      convidado?.nome_empresa ||
+      convidado?.whatsapp ||
+      emailExibivel(convidado?.email_contato) ||
+      'Fornecedor'
+
     activity.push({
       id: `proposta-${p.id}`,
       type: 'proposta_recebida',
       title: 'Proposta recebida',
-      description: `${p.profiles?.nome || 'Fornecedor'} enviou proposta para "${p.cotacoes?.titulo}"`,
+      description: `${quem} enviou proposta para "${p.cotacoes?.titulo}"`,
       created_at: p.created_at,
     })
   }
@@ -193,16 +280,16 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
         value: totalCotacoes,
         href: '/empresario/cotacoes',
         icon: 'FileText',
-        color: 'text-indigo-400',
-        bgColor: 'bg-indigo-500/10',
+        color: 'text-primary-400',
+        bgColor: 'bg-primary-500/10',
       },
       {
         label: 'Cotações Abertas',
         value: cotacoesAbertas,
         href: '/empresario/cotacoes?status=aberta',
         icon: 'TrendingUp',
-        color: 'text-emerald-400',
-        bgColor: 'bg-emerald-500/10',
+        color: 'text-success-400',
+        bgColor: 'bg-success-500/10',
       },
       {
         label: 'Propostas Recebidas',
@@ -216,8 +303,11 @@ export async function getDashboardEmpresario(): Promise<EmpresarioDashboardData>
     chartData,
     recentActivity: activity.slice(0, 5),
     cotacoesAbertas,
+    cotacoesFechadas,
+    totalItensCotacoes,
     totalProdutos,
     totalCategorias,
+    totalSegmentos,
   }
 }
 
@@ -231,38 +321,61 @@ export async function getDashboardFornecedor(): Promise<FornecedorDashboardData>
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('profiles')
-    .select('nome')
+    .from('users')
+    .select('nome, whatsapp')
     .eq('id', user.id)
     .single()
 
+  // fornecedores_convidados.email_contato/whatsapp é a única identificação
+  // disponível pro fornecedor (sem conta vinculada, ver CLAUDE.md/plano desta
+  // sessão) — propostas.fornecedor_id não existe no schema real, mesma ponte
+  // usada em getDashboardEmpresario e em backend/src/fornecedor/fornecedor.service.ts.
+  const email = user.email ?? ''
+  const fornecedorFilter = buildFornecedorOrFilter(email, profile?.whatsapp ?? null)
+
+  // As policies de RLS de propostas/fornecedores_convidados foram desenhadas
+  // pro fluxo público por token (/proposta/[token]), não pra um fornecedor
+  // autenticado cruzar as próprias propostas por e-mail/whatsapp — com o
+  // client de sessão essas queries voltavam 0 linhas mesmo com dados
+  // existentes. Usamos o admin client (como já feito acima pra
+  // products/categories) porque o filtro vem da própria sessão verificada
+  // (user.email/profile.whatsapp), não de input do cliente.
+  const adminClient = createAdminClient()
+
   // Stats
-  const [cotacoesDisponiveisRes, minhasPropostasRes, propostasAceitasRes] = await Promise.all([
+  const [cotacoesDisponiveisRes, minhasPropostasRes, propostasAceitasRes, propostasRecusadasRes] = await Promise.all([
     supabase
       .from('cotacoes')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'aberta'),
-    supabase
+    adminClient
       .from('propostas')
-      .select('*', { count: 'exact', head: true })
-      .eq('fornecedor_id', user.id),
-    supabase
+      .select('*, fornecedores_convidados!inner(email_contato, whatsapp)', { count: 'exact', head: true })
+      .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' }),
+    adminClient
       .from('propostas')
-      .select('*', { count: 'exact', head: true })
-      .eq('fornecedor_id', user.id)
+      .select('*, fornecedores_convidados!inner(email_contato, whatsapp)', { count: 'exact', head: true })
+      .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' })
       .eq('status', 'aceita'),
+    adminClient
+      .from('propostas')
+      .select('*, fornecedores_convidados!inner(email_contato, whatsapp)', { count: 'exact', head: true })
+      .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' })
+      .eq('status', 'recusada'),
   ])
 
   const cotacoesDisponiveis = cotacoesDisponiveisRes.count ?? 0
   const minhasPropostas = minhasPropostasRes.count ?? 0
   const propostasAceitas = propostasAceitasRes.count ?? 0
+  const propostasRecusadas = propostasRecusadasRes.count ?? 0
+  const propostasPendentes = Math.max(minhasPropostas - propostasAceitas - propostasRecusadas, 0)
 
   // Chart - propostas per day (last 7 days)
   const sevenDaysAgo = getDateNDaysAgo(7)
-  const { data: recentPropostasChart } = await supabase
+  const { data: recentPropostasChart } = await adminClient
     .from('propostas')
-    .select('created_at')
-    .eq('fornecedor_id', user.id)
+    .select('created_at, fornecedores_convidados!inner(email_contato, whatsapp)')
+    .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' })
     .gte('created_at', sevenDaysAgo)
     .order('created_at', { ascending: true })
 
@@ -280,10 +393,10 @@ export async function getDashboardFornecedor(): Promise<FornecedorDashboardData>
   // Recent activity
   const activity: ActivityItem[] = []
 
-  const { data: recentPropostas } = await supabase
+  const { data: recentPropostas } = await adminClient
     .from('propostas')
-    .select('id, created_at, status, cotacoes:cotacao_id(titulo)')
-    .eq('fornecedor_id', user.id)
+    .select('id, created_at, status, cotacoes:cotacao_id(titulo), fornecedores_convidados!inner(email_contato, whatsapp)')
+    .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' })
     .order('created_at', { ascending: false })
     .limit(5)
 
@@ -314,6 +427,27 @@ export async function getDashboardFornecedor(): Promise<FornecedorDashboardData>
 
   activity.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
+  const { data: propostasResumoRaw } = await adminClient
+    .from('propostas')
+    .select('id, status, valor_total, created_at, cotacoes:cotacao_id(titulo), fornecedores_convidados!inner(email_contato, whatsapp)')
+    .or(fornecedorFilter, { referencedTable: 'fornecedores_convidados' })
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  const propostasResumo = ((propostasResumoRaw as unknown as Array<{
+    id: string
+    status: string
+    valor_total: number | null
+    created_at: string
+    cotacoes: { titulo: string | null } | null
+  }>) || []).map((p) => ({
+    id: p.id,
+    status: p.status,
+    valor_total: p.valor_total ?? null,
+    created_at: p.created_at,
+    cotacao_titulo: p.cotacoes?.titulo ?? null,
+  }))
+
   return {
     userName: profile?.nome?.split(' ')[0] || 'Usuário',
     stats: [
@@ -322,8 +456,8 @@ export async function getDashboardFornecedor(): Promise<FornecedorDashboardData>
         value: cotacoesDisponiveis,
         href: '/fornecedor/cotacoes',
         icon: 'Search',
-        color: 'text-indigo-400',
-        bgColor: 'bg-indigo-500/10',
+        color: 'text-primary-400',
+        bgColor: 'bg-primary-500/10',
       },
       {
         label: 'Propostas Enviadas',
@@ -338,12 +472,18 @@ export async function getDashboardFornecedor(): Promise<FornecedorDashboardData>
         value: propostasAceitas,
         href: '/fornecedor/propostas?status=aceita',
         icon: 'TrendingUp',
-        color: 'text-emerald-400',
-        bgColor: 'bg-emerald-500/10',
+        color: 'text-success-400',
+        bgColor: 'bg-success-500/10',
       },
     ],
     chartData,
     recentActivity: activity.slice(0, 5),
     cotacoesDisponiveis,
+    propostasStatusCounts: {
+      pendente: propostasPendentes,
+      aceita: propostasAceitas,
+      recusada: propostasRecusadas,
+    },
+    propostasResumo,
   }
 }

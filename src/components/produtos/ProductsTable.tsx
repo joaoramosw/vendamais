@@ -1,12 +1,25 @@
 "use client";
 
-import { deleteProduct, deleteProductsBatch, duplicateProduct } from "@/actions/products";
+import {
+  deleteProduct,
+  deleteProductsBatch,
+  duplicateProduct,
+  getProductIdByBarcode,
+  getProducts,
+} from "@/actions/products";
+import { normalizePerPage, PER_PAGE_OPTIONS, PER_PAGE_STORAGE_KEY } from "@/lib/pagination";
+import { useInView } from "react-intersection-observer";
+import { looksLikeBarcode } from "@/lib/barcode";
 import { BarcodeScanner } from "@/components/produtos/BarcodeScanner";
 import { StockModal, type StockProduct } from "@/components/produtos/StockModal";
+import { ActionIconWrapper } from "@/components/ui/action-icon-wrapper";
+import { CopiedIcon, EyeToggleIcon } from "@/components/ui/animated-state-icons";
 import { Button } from "@/components/ui/button";
 import {
   ColumnConfigModal,
+  loadColumnLabels,
   loadColumnOrder,
+  saveColumnLabels,
   saveColumnOrder,
   type ColumnDef,
 } from "@/components/ui/column-config-modal";
@@ -26,7 +39,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { showToast } from "@/components/ui/toast";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useDraftList } from "@/lib/hooks/useDraftList";
+import { PRODUCT_FEATURES, useProductFeatures } from "@/lib/hooks/useProductFeatures";
 import { applySorting, useTableSort } from "@/lib/hooks/useTableSort";
 import { checkPermission } from "@/lib/roles";
 import type { ProductWithQuote, UserRole } from "@/lib/types/database";
@@ -35,11 +50,8 @@ import {
   ArrowUp,
   Camera,
   Check,
-  ChevronLeft,
-  ChevronRight,
-  Copy,
   Edit,
-  Eye,
+  Expand,
   Filter,
   ListCheck,
   ListMinus,
@@ -59,10 +71,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { BatchAddModal } from "./BatchAddModal";
 import { BatchEditModal } from "./BatchEditModal";
 import { ImagePreviewModal } from "./ImagePreviewModal";
+import { ProductQuickViewModal } from "./ProductQuickViewModal";
 
 /* ─── Column definitions ─── */
 const PRODUCT_COLUMNS: ColumnDef[] = [
-  { id: "select", label: "Selecionar", fixed: true },
+  { id: "select", label: "Selecionar", fixed: true, renamable: false },
   { id: "imagem", label: "Imagem" },
   { id: "nome", label: "Nome" },
   { id: "categoria", label: "Categoria" },
@@ -107,7 +120,7 @@ function StyledCheckbox({
         relative h-[18px] w-[18px] rounded-md border-2 transition-all duration-200 cursor-pointer flex items-center justify-center
         ${
           checked
-            ? "bg-indigo-500 border-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]"
+            ? "bg-primary-500 border-primary-500 shadow-[0_0_8px_rgba(99,102,241,0.4)]"
             : "bg-transparent border-white/20 hover:border-white/40"
         }
       `}
@@ -133,7 +146,10 @@ function SkeletonRow({ cols }: { cols: number }) {
     <TableRow>
       {Array.from({ length: cols }).map((_, i) => (
         <TableCell key={i}>
-          <div className="h-4 rounded bg-white/[0.06] animate-pulse" style={{ width: `${50 + Math.random() * 40}%` }} />
+          <div
+            className="h-4 rounded bg-neutral-200 dark:bg-white/[0.06] animate-pulse"
+            style={{ width: `${50 + ((i * 17) % 40)}%` }}
+          />
         </TableCell>
       ))}
     </TableRow>
@@ -145,8 +161,9 @@ interface ProductsTableProps {
   total: number;
   categories: { id: string; name: string; slug: string; color: string }[];
   userRole: UserRole;
-  currentPage: number;
   perPage: number;
+  /** A URL trouxe `perPage` explícito? Se não, vale a preferência salva. */
+  perPageFromUrl: boolean;
   filters: {
     search?: string;
     category?: string;
@@ -163,8 +180,8 @@ export function ProductsTable({
   total,
   categories,
   userRole,
-  currentPage,
   perPage,
+  perPageFromUrl,
   filters,
 }: ProductsTableProps) {
   const router = useRouter();
@@ -181,8 +198,119 @@ export function ProductsTable({
     name: string;
   } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  // Acesso rápido — edita os campos principais sem sair da listagem.
+  const [quickViewProduct, setQuickViewProduct] = useState<ProductWithQuote | null>(null);
   const draftList = useDraftList();
   const [isNavigating, startTransition] = useTransition();
+  const { features, isEnabled, setFeatures } = useProductFeatures();
+
+  /* ─── Carregamento dinâmico ───
+   * O servidor entrega só o primeiro lote; o resto é anexado conforme o
+   * usuário rola. `products` só muda de identidade quando o servidor
+   * re-renderiza (filtro, perPage, router.refresh), que é exatamente quando a
+   * lista acumulada precisa ser descartada. */
+  const [items, setItems] = useState<ProductWithQuote[]>(products);
+  const [loadedPages, setLoadedPages] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [endReached, setEndReached] = useState(false);
+
+  useEffect(() => {
+    setItems(products);
+    setLoadedPages(1);
+    setLoadError(null);
+    setEndReached(false);
+  }, [products]);
+
+  // `total` vem da contagem do banco, mas o filtro de preço é aplicado depois
+  // da paginação (ver getProducts) — com ele ativo a conta nunca fecha. Por
+  // isso um lote que não traz nada novo também encerra a lista, senão o
+  // observer ficaria pedindo página pra sempre.
+  const hasMore = !endReached && items.length < total;
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setLoadError(null);
+    try {
+      const proximaPagina = loadedPages + 1;
+      const { products: novos } = await getProducts({
+        ...filters,
+        page: proximaPagina,
+        perPage,
+      });
+      if (novos.length === 0) {
+        setEndReached(true);
+        return;
+      }
+      setItems((prev) => {
+        // A página pode ter mudado no servidor entre um lote e outro
+        // (produto criado/excluído por outra aba) — dedupe por id evita
+        // linha repetida e o erro de key duplicada do React.
+        const vistos = new Set(prev.map((p) => p.id));
+        return [...prev, ...novos.filter((p) => !vistos.has(p.id))];
+      });
+      setLoadedPages(proximaPagina);
+    } catch {
+      setLoadError("Não foi possível carregar mais produtos.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [filters, hasMore, loadedPages, loadingMore, perPage]);
+
+  // Sentinela: dispara antes de o usuário chegar no fim, pra a lista parecer
+  // contínua em vez de dar um solavanco no rodapé.
+  const { ref: sentinelRef, inView } = useInView({ rootMargin: "400px" });
+
+  useEffect(() => {
+    if (inView && hasMore && !loadingMore && !loadError) loadMore();
+  }, [inView, hasMore, loadingMore, loadError, loadMore]);
+
+  /** Carimba o tamanho do lote em toda navegação da listagem — sem isso,
+   * buscar ou filtrar joga a escolha do usuário de volta pro padrão. */
+  const withPerPage = useCallback(
+    (params: URLSearchParams, valor: number = perPage) => {
+      params.set("perPage", String(valor));
+      params.delete("page");
+      return params.toString();
+    },
+    [perPage],
+  );
+
+  const handlePerPageChange = (value: number) => {
+    try {
+      localStorage.setItem(PER_PAGE_STORAGE_KEY, String(value));
+    } catch {
+      // Sem localStorage a escolha só não persiste entre visitas.
+    }
+    const params = new URLSearchParams();
+    if (filters.search) params.set("search", filters.search);
+    if (filters.category) params.set("category", filters.category);
+    if (filters.barcode) params.set("barcode", filters.barcode);
+    if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
+    if (filters.dateTo) params.set("dateTo", filters.dateTo);
+    if (filters.priceMin) params.set("priceMin", filters.priceMin);
+    if (filters.priceMax) params.set("priceMax", filters.priceMax);
+    startTransition(() => router.push(`/empresario/produtos?${withPerPage(params, value)}`));
+  };
+
+  // Retoma o tamanho de lote escolhido numa visita anterior. A URL é a fonte de
+  // verdade (é dela que o servidor lê), então a preferência salva só entra
+  // quando a URL não diz nada.
+  useEffect(() => {
+    if (perPageFromUrl) return;
+    let salvo: string | null = null;
+    try {
+      salvo = localStorage.getItem(PER_PAGE_STORAGE_KEY);
+    } catch {
+      return;
+    }
+    if (!salvo) return;
+    const preferido = normalizePerPage(salvo);
+    if (preferido === perPage) return;
+    const params = new URLSearchParams(window.location.search);
+    router.replace(`/empresario/produtos?${withPerPage(params, preferido)}`);
+  }, [perPageFromUrl, perPage, router, withPerPage]);
 
   // Stock modal state
   const [showStockModal, setShowStockModal] = useState(false);
@@ -196,6 +324,9 @@ export function ProductsTable({
   const [showColumnConfig, setShowColumnConfig] = useState(false);
   const [columnOrder, setColumnOrder] = useState<string[]>(() =>
     loadColumnOrder(PRODUCT_COL_STORAGE_KEY, PRODUCT_DEFAULT_ORDER)
+  );
+  const [columnLabels, setColumnLabels] = useState<Record<string, string>>(() =>
+    loadColumnLabels(PRODUCT_COL_STORAGE_KEY)
   );
 
   // Barcode scanner
@@ -218,17 +349,30 @@ export function ProductsTable({
   const canUpdate = checkPermission(userRole, "update");
   const canDelete = checkPermission(userRole, "delete");
   const canBatchEdit = checkPermission(userRole, "batch_edit");
+  const podeSelecionar = (canUpdate || canDelete) && isEnabled("selecaoMultipla");
 
-  const totalPages = Math.ceil(total / perPage);
+  // Saída de emergência: se o usuário desligar o botão Configurações, este é o
+  // único caminho de volta pra tela de configurações.
+  useEffect(() => {
+    const atalho = (e: KeyboardEvent) => {
+      if (!e.shiftKey || e.key.toLowerCase() !== "c") return;
+      const alvo = e.target as HTMLElement | null;
+      if (alvo && /^(INPUT|TEXTAREA|SELECT)$/.test(alvo.tagName)) return;
+      if (alvo?.isContentEditable) return;
+      setShowColumnConfig(true);
+    };
+    window.addEventListener("keydown", atalho);
+    return () => window.removeEventListener("keydown", atalho);
+  }, []);
 
   const allSelected =
-    products.length > 0 && products.every((p) => selectedIds.has(p.id));
+    items.length > 0 && items.every((p) => selectedIds.has(p.id));
 
   const toggleAll = () => {
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(products.map((p) => p.id)));
+      setSelectedIds(new Set(items.map((p) => p.id)));
     }
   };
 
@@ -241,8 +385,43 @@ export function ProductsTable({
     });
   };
 
-  /* ─── Barcode helpers ─── */
-  const looksLikeBarcode = (str: string) => /^\d{6,}$/.test(str.trim());
+  /* ─── Seleção por Ctrl + clique / Ctrl + arrastar ───
+   * Estilo galeria de fotos: segurar Ctrl (⌘ no Mac) e arrastar sobre as
+   * linhas marca o intervalo. `base` guarda a seleção de antes do arrasto pra
+   * que voltar com o mouse desfaça o que passou — sem isso, arrastar pra trás
+   * deixaria linhas marcadas por engano. */
+  const dragSelectRef = useRef<{
+    anchor: number;
+    mode: "add" | "remove";
+    base: Set<string>;
+  } | null>(null);
+  const [isDragSelecting, setIsDragSelecting] = useState(false);
+
+  const applySelectionRange = useCallback(
+    (from: number, to: number, visiveis: ProductWithQuote[]) => {
+      const info = dragSelectRef.current;
+      if (!info) return;
+      const [ini, fim] = from <= to ? [from, to] : [to, from];
+      const alvo = visiveis.slice(ini, fim + 1).map((p) => p.id);
+      const next = new Set(info.base);
+      for (const id of alvo) {
+        if (info.mode === "add") next.add(id);
+        else next.delete(id);
+      }
+      setSelectedIds(next);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isDragSelecting) return;
+    const encerrar = () => {
+      dragSelectRef.current = null;
+      setIsDragSelecting(false);
+    };
+    window.addEventListener("mouseup", encerrar);
+    return () => window.removeEventListener("mouseup", encerrar);
+  }, [isDragSelecting]);
 
   /* ─── Sorting ─── */
   const { sortCriteria, toggleSort, getSortDirection, getSortIndex } = useTableSort();
@@ -264,15 +443,15 @@ export function ProductsTable({
   const displayProducts = useMemo(() => {
     const lowerSearch = searchInput.toLowerCase().trim();
     const filtered = lowerSearch
-      ? products.filter(
+      ? items.filter(
           (p) =>
             p.name.toLowerCase().includes(lowerSearch) ||
             (p.barcode ?? "").toLowerCase().includes(lowerSearch)
         )
-      : products;
+      : items;
 
     return applySorting(filtered, sortCriteria, getProductSortField);
-  }, [products, searchInput, sortCriteria, getProductSortField]);
+  }, [items, searchInput, sortCriteria, getProductSortField]);
 
   /* ─── Debounced server-side search (triggers after 500ms of typing) ─── */
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -298,7 +477,7 @@ export function ProductsTable({
           if (priceMin) params.set("priceMin", priceMin);
           if (priceMax) params.set("priceMax", priceMax);
           params.set("page", "1");
-          startTransition(() => router.push(`/empresario/produtos?${params.toString()}`));
+          startTransition(() => router.push(`/empresario/produtos?${withPerPage(params)}`));
         }
         return;
       }
@@ -306,7 +485,7 @@ export function ProductsTable({
         const params = new URLSearchParams();
         params.set("barcode", q);
         params.set("page", "1");
-        startTransition(() => router.push(`/empresario/produtos?${params.toString()}`));
+        startTransition(() => router.push(`/empresario/produtos?${withPerPage(params)}`));
       } else {
         const params = new URLSearchParams();
         params.set("search", q);
@@ -317,7 +496,7 @@ export function ProductsTable({
         if (priceMin) params.set("priceMin", priceMin);
         if (priceMax) params.set("priceMax", priceMax);
         params.set("page", "1");
-        router.push(`/empresario/produtos?${params.toString()}`);
+        router.push(`/empresario/produtos?${withPerPage(params)}`);
       }
     }, 500);
 
@@ -336,34 +515,37 @@ export function ProductsTable({
     if (dateTo) params.set("dateTo", dateTo);
     if (priceMin) params.set("priceMin", priceMin);
     if (priceMax) params.set("priceMax", priceMax);
-    params.set("page", "1");
-    router.push(`/empresario/produtos?${params.toString()}`);
-  }, [searchInput, categoryFilter, barcodeFilter, dateFrom, dateTo, priceMin, priceMax, router]);
+    router.push(`/empresario/produtos?${withPerPage(params)}`);
+  }, [searchInput, categoryFilter, barcodeFilter, dateFrom, dateTo, priceMin, priceMax, router, withPerPage]);
+
+  const handleBarcodeLookup = useCallback(async (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+
+    const { productId } = await getProductIdByBarcode(trimmed);
+
+    if (productId) {
+      router.push(`/empresario/produtos/editar/${productId}`);
+    } else {
+      showToast("Produto não encontrado. Abrindo cadastro de produto...", "warning");
+      router.push(`/empresario/produtos/novo?barcode=${encodeURIComponent(trimmed)}`);
+    }
+  }, [router]);
 
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter") return;
     const q = searchInput.trim();
     if (looksLikeBarcode(q)) {
-      // Busca por barcode diretamente
-      setBarcodeFilter(q);
-      const params = new URLSearchParams();
-      params.set("barcode", q);
-      params.set("page", "1");
-      router.push(`/empresario/produtos?${params.toString()}`);
+      // Código de barras: abre direto o produto (ou o cadastro, se não achar)
+      handleBarcodeLookup(q);
     } else {
       applyFilters();
     }
-  }, [searchInput, applyFilters, router]);
+  }, [searchInput, applyFilters, handleBarcodeLookup]);
 
   const handleBarcodeDetected = (code: string) => {
     setShowScanner(false);
-    setSearchInput(code);
-    setBarcodeFilter(code);
-    const params = new URLSearchParams();
-    params.set("barcode", code);
-    params.set("page", "1");
-    router.push(`/empresario/produtos?${params.toString()}`);
-    showToast(`Código detectado: ${code}`, "success");
+    handleBarcodeLookup(code);
   };
 
   const clearFilters = () => {
@@ -374,20 +556,7 @@ export function ProductsTable({
     setDateTo("");
     setPriceMin("");
     setPriceMax("");
-    router.push("/empresario/produtos");
-  };
-
-  const goToPage = (page: number) => {
-    const params = new URLSearchParams();
-    if (filters.search) params.set("search", filters.search);
-    if (filters.category) params.set("category", filters.category);
-    if (filters.barcode) params.set("barcode", filters.barcode);
-    if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
-    if (filters.dateTo) params.set("dateTo", filters.dateTo);
-    if (filters.priceMin) params.set("priceMin", filters.priceMin);
-    if (filters.priceMax) params.set("priceMax", filters.priceMax);
-    params.set("page", page.toString());
-    router.push(`/empresario/produtos?${params.toString()}`);
+    router.push(`/empresario/produtos?${withPerPage(new URLSearchParams())}`);
   };
 
   const handleDelete = async () => {
@@ -439,7 +608,7 @@ export function ProductsTable({
 
   /* ─── Add to draft with stock modal ─── */
   const handleBatchAddToDraft = () => {
-    const toAdd = products.filter((p) => selectedIds.has(p.id));
+    const toAdd = items.filter((p) => selectedIds.has(p.id));
     const newItems: StockProduct[] = [];
     const alreadyInList: string[] = [];
 
@@ -470,8 +639,8 @@ export function ProductsTable({
   };
 
   const handleStockConfirm = (stockMap: Record<string, number>) => {
-    stockMap && Object.entries(stockMap).forEach(([productId, estoque]) => {
-      const product = products.find((p) => p.id === productId);
+    Object.entries(stockMap).forEach(([productId, estoque]) => {
+      const product = items.find((p) => p.id === productId);
       if (!product) return;
       draftList.addItem({
         productId: product.id,
@@ -481,6 +650,9 @@ export function ProductsTable({
         categoria: product.category ?? null,
         precoAtual: product.price_unit_store > 0 ? product.price_unit_store : null,
         estoque,
+        // Zero = campo vazio na lista de cotação ("clique para preencher").
+        // O envio já barra item sem quantidade, então é melhor pedir o número
+        // do que mandar um "1" que ninguém decidiu.
         quantidadeSugerida: 0,
         tipoUnidade: defaultUnit as "UN" | "CX" | "DZ" | "FD",
       });
@@ -507,7 +679,7 @@ export function ProductsTable({
 
   /* ─── Remove from draft in batch ─── */
   const handleBatchRemoveFromDraft = () => {
-    const toRemove = products.filter((p) => selectedIds.has(p.id) && draftList.hasItem(p.id));
+    const toRemove = items.filter((p) => selectedIds.has(p.id) && draftList.hasItem(p.id));
     if (toRemove.length === 0) {
       showToast("Nenhum dos selecionados está na lista de cotação.", "info");
       return;
@@ -548,6 +720,11 @@ export function ProductsTable({
     saveColumnOrder(PRODUCT_COL_STORAGE_KEY, newOrder);
   }, []);
 
+  const handleSaveColumnLabels = useCallback((newLabels: Record<string, string>) => {
+    setColumnLabels(newLabels);
+    saveColumnLabels(PRODUCT_COL_STORAGE_KEY, newLabels);
+  }, []);
+
   const hasActiveFilters = !!(
     filters.search ||
     filters.category ||
@@ -559,7 +736,7 @@ export function ProductsTable({
   );
 
   // Check how many selected items are in draft list
-  const selectedInDraft = products.filter((p) => selectedIds.has(p.id) && draftList.hasItem(p.id)).length;
+  const selectedInDraft = items.filter((p) => selectedIds.has(p.id) && draftList.hasItem(p.id)).length;
 
   /* ─── Get delete description with draft warning ─── */
   const getDeleteDescription = () => {
@@ -584,12 +761,13 @@ export function ProductsTable({
           </TableHead>
         ) : null;
       case "imagem":
-        return <TableHead key={colId} className="w-20">Imagem</TableHead>;
+        return <TableHead key={colId} className="w-20">{columnLabels.imagem ?? "Imagem"}</TableHead>;
       case "nome":
       case "categoria":
       case "preco":
       case "cotacao": {
-        const label = { nome: "Nome", categoria: "Categoria", preco: "Preço", cotacao: "Última Cotação" }[colId];
+        const defaultLabel = { nome: "Nome", categoria: "Categoria", preco: "Preço", cotacao: "Última Cotação" }[colId];
+        const label = columnLabels[colId] ?? defaultLabel;
         const width = { nome: undefined, categoria: "w-32", preco: "w-44", cotacao: "w-44" }[colId];
         const dir = getSortDirection(colId);
         const idx = getSortIndex(colId);
@@ -599,26 +777,26 @@ export function ProductsTable({
             <button
               type="button"
               onClick={() => toggleSort(colId)}
-              className="flex items-center gap-1.5 text-inherit hover:text-indigo-400 transition-colors cursor-pointer select-none w-full group/sort"
+              className="flex items-center gap-1.5 text-inherit hover:text-primary-400 transition-colors cursor-pointer select-none w-full group/sort"
             >
               {label}
               {dir && hint && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 whitespace-nowrap">
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-400 whitespace-nowrap">
                   {dir === "asc" ? hint.asc : hint.desc}
                 </span>
               )}
               {!dir && (
-                <ArrowUp className="h-3 w-3 text-gray-600 opacity-0 group-hover/sort:opacity-100 transition-opacity" />
+                <ArrowUp className="h-3 w-3 text-neutral-600 opacity-0 group-hover/sort:opacity-100 transition-opacity" />
               )}
               {dir && sortCriteria.length > 1 && (
-                <span className="text-[9px] text-indigo-400/60 font-bold">{idx}</span>
+                <span className="text-[9px] text-primary-400/60 font-bold">{idx}</span>
               )}
             </button>
           </TableHead>
         );
       }
       case "acoes":
-        return <TableHead key={colId} className="w-28">Ações</TableHead>;
+        return <TableHead key={colId} className="w-28">{columnLabels.acoes ?? "Ações"}</TableHead>;
       default:
         return null;
     }
@@ -640,13 +818,11 @@ export function ProductsTable({
           <TableCell key={colId} onClick={(e) => e.stopPropagation()}>
             {product.image_url ? (
               <button
-                onClick={() =>
-                  setPreviewImage({
-                    url: product.image_url!,
-                    name: product.name,
-                  })
-                }
-                className="relative h-[60px] w-[60px] rounded-[var(--radius-md)] overflow-hidden bg-white/[0.06] hover:ring-2 hover:ring-primary-400 transition-all cursor-pointer group/img"
+                onClick={(e) => {
+                  if (e.ctrlKey || e.metaKey) return;
+                  setPreviewImage({ url: product.image_url!, name: product.name });
+                }}
+                className="relative h-[60px] w-[60px] rounded-[var(--radius-md)] overflow-hidden bg-neutral-100 dark:bg-white/[0.06] hover:ring-2 hover:ring-primary-400 transition-all cursor-pointer group/img"
               >
                 <Image
                   src={product.image_url}
@@ -657,28 +833,54 @@ export function ProductsTable({
                 />
               </button>
             ) : (
-              <div className="h-[60px] w-[60px] rounded-[var(--radius-md)] bg-white/[0.04] border border-dashed border-white/10 flex items-center justify-center">
-                <Package className="h-6 w-6 text-gray-600" />
+              <div className="h-[60px] w-[60px] rounded-[var(--radius-md)] bg-neutral-50 dark:bg-white/[0.04] border border-dashed border-neutral-200 dark:border-white/10 flex items-center justify-center">
+                <Package className="h-6 w-6 text-neutral-600" />
               </div>
             )}
           </TableCell>
         );
       case "nome":
+        // Nome e ícone de expandir fazem a mesma coisa: abrem o acesso rápido.
+        // A edição completa fica no botão da coluna Ações.
         return (
-          <TableCell
-            key={colId}
-            onClick={() =>
-              router.push(`/empresario/produtos/editar/${product.id}`)
-            }
-          >
-            <span className="font-semibold text-gray-100 group-hover:text-indigo-400 transition-colors line-clamp-2 max-w-[220px] block">
-              {product.name}
-            </span>
-            {product.barcode && (
-              <span className="text-xs text-gray-500 mt-0.5 block font-mono">
-                {product.barcode}
-              </span>
-            )}
+          <TableCell key={colId}>
+            <div className="flex items-start gap-1.5">
+              <Tooltip label="Acesso rápido" className="min-w-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    // Ctrl/⌘ é seleção múltipla, não abre o acesso rápido.
+                    if (e.ctrlKey || e.metaKey) return;
+                    setQuickViewProduct(product);
+                  }}
+                  aria-label={`Acesso rápido: ${product.name}`}
+                  className="text-left min-w-0 cursor-pointer"
+                >
+                  <span className="font-semibold text-neutral-900 dark:text-neutral-100 group-hover:text-primary-400 transition-colors line-clamp-2 max-w-[220px] block">
+                    {product.name}
+                  </span>
+                  {product.barcode && (
+                    <span className="text-xs text-neutral-500 mt-0.5 block font-mono">
+                      {product.barcode}
+                    </span>
+                  )}
+                </button>
+              </Tooltip>
+              <Tooltip label="Acesso rápido" className="shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (e.ctrlKey || e.metaKey) return;
+                    setQuickViewProduct(product);
+                  }}
+                  aria-label={`Acesso rápido: ${product.name}`}
+                  className="p-1 rounded-[var(--radius-md)] text-neutral-400 dark:text-neutral-600 hover:text-primary-400 hover:bg-primary-500/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all cursor-pointer"
+                >
+                  <Expand className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            </div>
           </TableCell>
         );
       case "categoria":
@@ -696,7 +898,7 @@ export function ProductsTable({
                   </span>
                 ))
               ) : (
-                <span className="text-gray-600 italic text-xs">—</span>
+                <span className="text-neutral-600 italic text-xs">—</span>
               )}
             </div>
           </TableCell>
@@ -705,11 +907,11 @@ export function ProductsTable({
         return (
           <TableCell key={colId}>
             {product.price_unit_store > 0 ? (
-              <span className="text-sm font-semibold text-gray-200 whitespace-nowrap">
+              <span className="text-sm font-semibold text-neutral-200 whitespace-nowrap">
                 {formatCurrency(product.price_unit_store)}
               </span>
             ) : (
-              <span className="text-gray-600 text-xs italic">—</span>
+              <span className="text-neutral-600 text-xs italic">—</span>
             )}
           </TableCell>
         );
@@ -718,77 +920,98 @@ export function ProductsTable({
           <TableCell key={colId}>
             {product.latest_quote ? (
               <div className="space-y-0.5">
-                <p className="text-sm font-bold text-emerald-400 whitespace-nowrap">
+                <p className="text-sm font-bold text-success-400 whitespace-nowrap">
                   {formatCurrency(product.latest_quote.price)}
                 </p>
-                <p className="text-xs text-gray-400 truncate max-w-[150px]">
+                <p className="text-xs text-neutral-400 truncate max-w-[150px]">
                   {product.latest_quote.company_name}
                 </p>
-                <p className="text-[11px] text-gray-600">
+                <p className="text-[11px] text-neutral-600">
                   {formatRelativeDate(product.latest_quote.created_at)}
                 </p>
               </div>
             ) : (
-              <span className="text-gray-600 text-xs italic">Sem cotação</span>
+              <span className="text-neutral-600 text-xs italic">Sem cotação</span>
             )}
           </TableCell>
         );
       case "acoes":
         return (
-          <TableCell key={colId} onClick={(e) => e.stopPropagation()}>
+          <TableCell
+            key={colId}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-1">
-              <Link
-                href={`/empresario/produtos/editar/${product.id}`}
-              >
-                <button
-                  className="p-1.5 rounded-[var(--radius-md)] text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors cursor-pointer"
-                  title={canUpdate ? "Editar" : "Visualizar"}
-                >
-                  {canUpdate ? (
-                    <Edit className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
-              </Link>
+              <Tooltip label={canUpdate ? "Edição completa" : "Ver detalhes"}>
+                <Link href={`/empresario/produtos/editar/${product.id}`}>
+                  <button
+                    className="p-1.5 rounded-[var(--radius-md)] text-neutral-500 hover:text-primary-400 hover:bg-primary-500/10 transition-colors cursor-pointer"
+                    aria-label={canUpdate ? "Edição completa" : "Ver detalhes"}
+                  >
+                    {canUpdate ? (
+                      <Edit className="h-4 w-4" />
+                    ) : (
+                      <EyeToggleIcon size={16} className="h-4 w-4" isActive={false} />
+                    )}
+                  </button>
+                </Link>
+              </Tooltip>
               {canCreate && (
-                <button
-                  onClick={() => handleDuplicate(product.id)}
-                  disabled={duplicatingId === product.id}
-                  className="p-1.5 rounded-[var(--radius-md)] text-gray-500 hover:text-amber-400 hover:bg-amber-500/10 transition-colors cursor-pointer disabled:opacity-50"
-                  title="Duplicar"
-                >
-                  {duplicatingId === product.id ? (
+                duplicatingId === product.id ? (
+                  <button className="p-1.5 rounded-[var(--radius-md)] text-warning-400 disabled:opacity-50 cursor-not-allowed">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </button>
+                  </button>
+                ) : (
+                  <Tooltip label="Duplicar produto">
+                    <ActionIconWrapper
+                      icon={CopiedIcon}
+                      onClick={() => handleDuplicate(product.id)}
+                      size={16}
+                      className="h-4 w-4 text-inherit"
+                      wrapperClassName="p-1.5 rounded-[var(--radius-md)] text-neutral-500 hover:text-warning-400 hover:bg-warning-500/10 transition-colors cursor-pointer"
+                    />
+                  </Tooltip>
+                )
               )}
               {canDelete && (
-                <button
-                  onClick={() => setDeleteId(product.id)}
-                  className="p-1.5 rounded-[var(--radius-md)] text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
-                  title="Excluir"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <Tooltip label="Excluir produto">
+                  <button
+                    onClick={() => setDeleteId(product.id)}
+                    aria-label="Excluir produto"
+                    className="p-1.5 rounded-[var(--radius-md)] text-neutral-500 hover:text-danger-400 hover:bg-danger-500/10 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </Tooltip>
               )}
-              <button
-                onClick={() => handleSingleAddToDraft(product)}
-                className={`p-1.5 rounded-[var(--radius-md)] transition-colors cursor-pointer ${
+              <Tooltip
+                label={
                   draftList.hasItem(product.id)
-                    ? "text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
-                    : "text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/10"
-                }`}
-                title={draftList.hasItem(product.id) ? "Remover da lista" : "Adicionar à lista"}
+                    ? "Remover da lista de cotação"
+                    : "Adicionar à lista de cotação"
+                }
               >
-                {draftList.hasItem(product.id) ? (
-                  <ListCheck className="h-4 w-4" />
-                ) : (
-                  <ListPlus className="h-4 w-4" />
-                )}
-              </button>
+                <button
+                  onClick={() => handleSingleAddToDraft(product)}
+                  aria-label={
+                    draftList.hasItem(product.id)
+                      ? "Remover da lista de cotação"
+                      : "Adicionar à lista de cotação"
+                  }
+                  className={`p-1.5 rounded-[var(--radius-md)] transition-colors cursor-pointer ${
+                    draftList.hasItem(product.id)
+                      ? "text-success-400 hover:text-success-300 hover:bg-success-500/10"
+                      : "text-neutral-500 hover:text-primary-400 hover:bg-primary-500/10"
+                  }`}
+                >
+                  {draftList.hasItem(product.id) ? (
+                    <ListCheck className="h-4 w-4" />
+                  ) : (
+                    <ListPlus className="h-4 w-4" />
+                  )}
+                </button>
+              </Tooltip>
             </div>
           </TableCell>
         );
@@ -799,58 +1022,84 @@ export function ProductsTable({
 
   return (
     <div className="space-y-4">
+      {/* Cabeçalho da tela — Configurações fica aqui, à direita, antes do total */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-black text-neutral-900 dark:text-white tracking-tight">
+            Produtos
+          </h1>
+          <p className="text-neutral-400 font-medium mt-1">
+            Gerencie seu catálogo de produtos, cotações e códigos de barras.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 mt-1.5 shrink-0">
+          {isEnabled("configuracoes") && (
+            <Tooltip label="Colunas e funcionalidades da tela">
+              <Button variant="secondary" size="sm" onClick={() => setShowColumnConfig(true)}>
+                <Settings2 className="h-4 w-4" />
+                Configurações
+              </Button>
+            </Tooltip>
+          )}
+          <span className="text-xs font-bold text-neutral-500 bg-white/[0.04] border border-white/[0.06] px-3 py-1 rounded-full">
+            {total.toLocaleString("pt-BR")} {total === 1 ? "produto" : "produtos"}
+          </span>
+        </div>
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1 w-full sm:w-auto">
           {/* Search */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
-            <input
-              type="text"
-              placeholder="Buscar por nome ou cód. barras..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              className="w-full pl-9 pr-9 py-2.5 text-sm border border-white/10 rounded-[var(--radius-md)] bg-[#1a2332] text-gray-100 placeholder:text-gray-500 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 outline-none transition-all"
-            />
-            {(isDebouncing || isNavigating) && (
-              <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400 animate-spin" />
-            )}
-          </div>
+          {isEnabled("busca") && (
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+              <input
+                type="text"
+                placeholder="Buscar por nome ou cód. barras..."
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                className="w-full pl-9 pr-9 py-2.5 text-sm border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 dark:placeholder:text-neutral-500 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 outline-none transition-all"
+              />
+              {(isDebouncing || isNavigating) && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary-400 animate-spin" />
+              )}
+            </div>
+          )}
 
-          <Button
-            variant="secondary"
-            size="icon"
-            onClick={() => setShowScanner(true)}
-            title="Escanear código de barras"
-          >
-            <Camera className="h-4 w-4" />
-          </Button>
+          {isEnabled("escanear") && (
+            <Tooltip label="Ler código de barras pela câmera">
+              <Button
+                variant={showScanner ? "primary" : "secondary"}
+                size="sm"
+                onClick={() => setShowScanner((prev) => !prev)}
+              >
+                <Camera className="h-4 w-4" />
+                Escanear
+              </Button>
+            </Tooltip>
+          )}
 
-          <Button
-            variant={showFilters ? "primary" : "secondary"}
-            size="icon"
-            onClick={() => setShowFilters(!showFilters)}
-            title="Filtros"
-          >
-            <Filter className="h-4 w-4" />
-          </Button>
-
-          <Button
-            variant="secondary"
-            size="icon"
-            onClick={() => setShowColumnConfig(true)}
-            title="Configurar colunas"
-          >
-            <Settings2 className="h-4 w-4" />
-          </Button>
+          {isEnabled("filtros") && (
+            <Tooltip label="Filtrar por categoria, data e preço">
+              <Button
+                variant={showFilters ? "primary" : "secondary"}
+                size="sm"
+                onClick={() => setShowFilters(!showFilters)}
+              >
+                <Filter className="h-4 w-4" />
+                Filtros
+              </Button>
+            </Tooltip>
+          )}
 
           {hasActiveFilters && (
             <Button
               variant="ghost"
               size="sm"
               onClick={clearFilters}
-              className="text-indigo-400"
+              className="text-primary-400"
             >
               <X className="h-3.5 w-3.5" />
               Limpar
@@ -864,7 +1113,7 @@ export function ProductsTable({
               variant="ghost"
               size="sm"
               onClick={() => setShowBatchDeleteConfirm(true)}
-              className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              className="text-danger-400 hover:text-danger-300 hover:bg-danger-500/10"
             >
               <Trash2 className="h-4 w-4" />
               Excluir {selectedIds.size}
@@ -875,7 +1124,7 @@ export function ProductsTable({
               variant="ghost"
               size="sm"
               onClick={handleBatchRemoveFromDraft}
-              className="text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+              className="text-warning-400 hover:text-warning-300 hover:bg-warning-500/10"
             >
               <ListMinus className="h-4 w-4" />
               - Lista ({selectedInDraft})
@@ -886,7 +1135,7 @@ export function ProductsTable({
               variant="ghost"
               size="sm"
               onClick={handleBatchAddToDraft}
-              className="text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10"
+              className="text-primary-400 hover:text-primary-300 hover:bg-primary-500/10"
             >
               <ListPlus className="h-4 w-4" />
               + Lista ({selectedIds.size})
@@ -924,7 +1173,7 @@ export function ProductsTable({
       </div>
 
       {/* Scanner */}
-      {showScanner && (
+      {showScanner && isEnabled("escanear") && (
         <div className="animate-fade-in">
           <BarcodeScanner
             onDetected={handleBarcodeDetected}
@@ -934,17 +1183,17 @@ export function ProductsTable({
       )}
 
       {/* Filters Panel */}
-      {showFilters && (
-        <div className="bg-[#1F2937] border border-white/[0.06] rounded-[var(--radius-lg)] p-4 space-y-3 animate-fade-in">
+      {showFilters && isEnabled("filtros") && (
+        <div className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-white/[0.06] rounded-[var(--radius-lg)] p-4 space-y-3 animate-fade-in">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-400">
+              <label className="text-xs font-medium text-neutral-400">
                 Categoria
               </label>
               <select
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
-                className="w-full border border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-[#1a2332] text-gray-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               >
                 <option value="">Todas</option>
                 {categories.map((cat) => (
@@ -956,31 +1205,31 @@ export function ProductsTable({
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-400">
+              <label className="text-xs font-medium text-neutral-400">
                 Data início
               </label>
               <input
                 type="date"
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
-                className="w-full border border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-[#1a2332] text-gray-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-400">
+              <label className="text-xs font-medium text-neutral-400">
                 Data fim
               </label>
               <input
                 type="date"
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
-                className="w-full border border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-[#1a2332] text-gray-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-400">
+              <label className="text-xs font-medium text-neutral-400">
                 Preço mín. (R$)
               </label>
               <input
@@ -990,12 +1239,12 @@ export function ProductsTable({
                 placeholder="0,00"
                 value={priceMin}
                 onChange={(e) => setPriceMin(e.target.value)}
-                className="w-full border border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-[#1a2332] text-gray-100 placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 dark:placeholder:text-neutral-500 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-gray-400">
+              <label className="text-xs font-medium text-neutral-400">
                 Preço máx. (R$)
               </label>
               <input
@@ -1005,7 +1254,7 @@ export function ProductsTable({
                 placeholder="0,00"
                 value={priceMax}
                 onChange={(e) => setPriceMax(e.target.value)}
-                className="w-full border border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-[#1a2332] text-gray-100 placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full border border-neutral-200 dark:border-white/10 rounded-[var(--radius-md)] px-3 py-2 text-sm bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 dark:placeholder:text-neutral-500 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
           </div>
@@ -1022,8 +1271,8 @@ export function ProductsTable({
       )}
 
       {/* Table */}
-      <div className="bg-[#1F2937] border border-white/[0.06] rounded-[var(--radius-lg)] overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
+      <div className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-white/[0.06] rounded-[var(--radius-lg)] overflow-hidden shadow-xs">
+        <div className={`overflow-x-auto ${isDragSelecting ? "select-none" : ""}`}>
           <Table>
             <TableHeader>
               <TableRow>
@@ -1040,11 +1289,11 @@ export function ProductsTable({
                 <TableRow>
                   <TableCell colSpan={columnOrder.length} className="text-center py-16">
                     <div className="flex flex-col items-center gap-3">
-                      <div className="h-16 w-16 rounded-full bg-neutral-700 flex items-center justify-center">
+                      <div className="h-16 w-16 rounded-full bg-neutral-100 dark:bg-neutral-700 flex items-center justify-center">
                         <Package className="h-8 w-8 text-neutral-500" />
                       </div>
                       <div>
-                        <p className="text-base font-medium text-neutral-300">
+                        <p className="text-base font-medium text-neutral-700 dark:text-neutral-300">
                           Nenhum produto encontrado
                         </p>
                         <p className="text-sm text-neutral-500 mt-1">
@@ -1065,11 +1314,27 @@ export function ProductsTable({
                   </TableCell>
                 </TableRow>
               ) : (
-                displayProducts.map((product) => (
+                displayProducts.map((product, index) => (
                   <TableRow
                     key={product.id}
                     selected={selectedIds.has(product.id)}
                     className="group cursor-pointer"
+                    onMouseDown={(e) => {
+                      if (!podeSelecionar || !(e.ctrlKey || e.metaKey)) return;
+                      // Sem isso o navegador começa a selecionar o texto da tabela.
+                      e.preventDefault();
+                      dragSelectRef.current = {
+                        anchor: index,
+                        mode: selectedIds.has(product.id) ? "remove" : "add",
+                        base: new Set(selectedIds),
+                      };
+                      setIsDragSelecting(true);
+                      applySelectionRange(index, index, displayProducts);
+                    }}
+                    onMouseEnter={() => {
+                      if (!dragSelectRef.current) return;
+                      applySelectionRange(dragSelectRef.current.anchor, index, displayProducts);
+                    }}
                   >
                     {columnOrder.map((colId) => renderBodyCell(colId, product))}
                   </TableRow>
@@ -1079,65 +1344,82 @@ export function ProductsTable({
           </Table>
         </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-white/[0.06]">
-            <p className="text-sm text-gray-400">
+        {/* Rodapé fluido — progresso + tamanho do lote + carregamento por rolagem */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-t border-neutral-200 dark:border-white/[0.06]">
+          <div className="min-w-0">
+            <p className="text-sm text-neutral-500 dark:text-neutral-400">
               Mostrando{" "}
-              <span className="font-medium text-gray-200">
-                {(currentPage - 1) * perPage + 1}
-              </span>{" "}
-              a{" "}
-              <span className="font-medium text-gray-200">
-                {Math.min(currentPage * perPage, total)}
+              <span className="font-medium text-neutral-900 dark:text-neutral-200">
+                {displayProducts.length}
               </span>{" "}
               de{" "}
-              <span className="font-medium text-gray-200">
-                {total}
-              </span>
+              <span className="font-medium text-neutral-900 dark:text-neutral-200">
+                {total.toLocaleString("pt-BR")}
+              </span>{" "}
+              {total === 1 ? "produto" : "produtos"}
             </p>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={currentPage <= 1}
-                onClick={() => goToPage(currentPage - 1)}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                let pageNum: number;
-                if (totalPages <= 5) {
-                  pageNum = i + 1;
-                } else if (currentPage <= 3) {
-                  pageNum = i + 1;
-                } else if (currentPage >= totalPages - 2) {
-                  pageNum = totalPages - 4 + i;
-                } else {
-                  pageNum = currentPage - 2 + i;
-                }
-                return (
-                  <Button
-                    key={pageNum}
-                    variant={pageNum === currentPage ? "primary" : "ghost"}
-                    size="sm"
-                    onClick={() => goToPage(pageNum)}
-                    className="min-w-[36px]"
-                  >
-                    {pageNum}
-                  </Button>
-                );
-              })}
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={currentPage >= totalPages}
-                onClick={() => goToPage(currentPage + 1)}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
+            {podeSelecionar && (
+              <p className="text-[11px] text-neutral-500 mt-0.5">
+                Segure <kbd className="px-1 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] font-mono text-[10px]">Ctrl</kbd>{" "}
+                e clique — ou arraste sobre as linhas — para selecionar vários.
+              </p>
+            )}
           </div>
+
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="produtos-per-page"
+              className="text-xs text-neutral-500 dark:text-neutral-400 whitespace-nowrap"
+            >
+              Itens por vez
+            </label>
+            <select
+              id="produtos-per-page"
+              value={perPage}
+              onChange={(e) => handlePerPageChange(Number(e.target.value))}
+              className="h-8 pl-2.5 pr-7 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-white/[0.08] rounded-[var(--radius-md)] text-sm text-neutral-900 dark:text-neutral-200 outline-none focus:border-primary-400 transition-colors cursor-pointer"
+            >
+              {PER_PAGE_OPTIONS.map((opcao) => (
+                <option key={opcao} value={opcao}>
+                  {opcao}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Sentinela do scroll infinito. Fica fora do container rolável da
+            tabela pra observar a rolagem da página, e o botão abaixo é a saída
+            manual quando o observer não dispara (aba em segundo plano, etc.). */}
+        {hasMore && searchInput.trim() === (filters.search ?? "").trim() && (
+          <div
+            ref={sentinelRef}
+            className="flex flex-col items-center justify-center gap-2 py-6 border-t border-neutral-200 dark:border-white/[0.06]"
+          >
+            {loadError ? (
+              <>
+                <p className="text-sm text-danger-400">{loadError}</p>
+                <Button variant="secondary" size="sm" onClick={loadMore}>
+                  Tentar de novo
+                </Button>
+              </>
+            ) : loadingMore ? (
+              <span className="flex items-center gap-2 text-sm text-neutral-500">
+                <Loader2 className="h-4 w-4 animate-spin text-primary-400" />
+                Carregando mais produtos...
+              </span>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={loadMore}>
+                Carregar mais
+              </Button>
+            )}
+          </div>
+        )}
+
+        {!hasMore && total > perPage && (
+          <p className="py-4 text-center text-xs text-neutral-500 border-t border-neutral-200 dark:border-white/[0.06]">
+            Você chegou ao fim da lista.
+          </p>
         )}
       </div>
 
@@ -1182,6 +1464,13 @@ export function ProductsTable({
         />
       )}
 
+      <ProductQuickViewModal
+        product={quickViewProduct}
+        categories={categories}
+        canUpdate={canUpdate}
+        onClose={() => setQuickViewProduct(null)}
+      />
+
       {/* Delete batch confirmation */}
       <ConfirmDialog
         open={showBatchDeleteConfirm}
@@ -1213,10 +1502,10 @@ export function ProductsTable({
           Itens já na lista
         </ModalHeader>
         <ModalBody className="space-y-3">
-          <p className="text-sm text-gray-300">
+          <p className="text-sm text-neutral-300">
             Todos os {duplicateProductIds.length} item(ns) selecionado(s) já estão na lista de cotação.
           </p>
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-neutral-400">
             Deseja removê-los da lista?
           </p>
         </ModalBody>
@@ -1241,9 +1530,15 @@ export function ProductsTable({
       <ColumnConfigModal
         open={showColumnConfig}
         onClose={() => setShowColumnConfig(false)}
+        title="Configurações"
         columns={PRODUCT_COLUMNS}
         columnOrder={columnOrder}
         onSave={handleSaveColumnOrder}
+        columnLabels={columnLabels}
+        onLabelsChange={handleSaveColumnLabels}
+        featureDefs={PRODUCT_FEATURES}
+        featureState={features}
+        onFeaturesChange={setFeatures}
       />
     </div>
   );

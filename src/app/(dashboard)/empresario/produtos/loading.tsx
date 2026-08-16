@@ -53,7 +53,7 @@ export default function ProdutosLoading() {
               <div className="h-5 w-16 bg-primary-50 dark:bg-primary-900/20 rounded-full animate-skeleton" />
             </div>
             <div className="flex flex-col gap-1 justify-center">
-              <div className="h-4 w-20 bg-emerald-50 dark:bg-emerald-900/20 rounded animate-skeleton" />
+              <div className="h-4 w-20 bg-success-50 dark:bg-success-900/20 rounded animate-skeleton" />
               <div className="h-3 w-24 bg-neutral-100 dark:bg-neutral-700 rounded animate-skeleton" />
             </div>
             <div className="flex items-center">

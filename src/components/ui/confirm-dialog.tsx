@@ -20,14 +20,14 @@ interface ConfirmDialogProps {
 const variantConfig = {
   danger: {
     icon: Trash2,
-    iconBg: "bg-red-50 dark:bg-red-950/40",
-    iconColor: "text-red-600 dark:text-red-400",
+    iconBg: "bg-danger-50 dark:bg-danger-950/40",
+    iconColor: "text-danger-600 dark:text-danger-400",
     buttonVariant: "danger" as const,
   },
   warning: {
     icon: AlertTriangle,
-    iconBg: "bg-amber-50 dark:bg-amber-950/40",
-    iconColor: "text-amber-600 dark:text-amber-400",
+    iconBg: "bg-warning-50 dark:bg-warning-950/40",
+    iconColor: "text-warning-600 dark:text-warning-400",
     buttonVariant: "primary" as const,
   },
   info: {

@@ -1,9 +1,11 @@
 import { getCategories, getProductCategoryIds } from "@/actions/categories";
+import { getMargemConfig } from "@/actions/margem";
+import { getHistoricoProduto } from "@/actions/product-history";
 import { getProduct } from "@/actions/products";
 import { ProductForm } from "@/components/produtos/ProductForm";
+import { ProdutoHistoricoSection } from "@/components/produtos/historico/ProdutoHistoricoSection";
 import { ToastContainer } from "@/components/ui/toast";
-import { getUserRole } from "@/lib/roles.server";
-import type { UserRole } from "@/lib/types/database";
+import { getCurrentUserRole } from "@/lib/roles.server";
 import { notFound, redirect } from "next/navigation";
 
 interface PageProps {
@@ -12,9 +14,9 @@ interface PageProps {
 
 export default async function EditarProdutoPage({ params }: PageProps) {
   const { id } = await params;
-  const role: UserRole = await getUserRole();
+  const role = await getCurrentUserRole();
 
-  if (role === "fornecedor") {
+  if (role === "supplier") {
     redirect("/fornecedor/dashboard");
   }
 
@@ -28,6 +30,13 @@ export default async function EditarProdutoPage({ params }: PageProps) {
   const { categories } = await getCategories();
   const initialCategoryIds = await getProductCategoryIds(id);
 
+  // Histórico e margem carregam no servidor para a seção já montar com dado —
+  // o refetch por período depois acontece no cliente.
+  const [{ config: margemConfig }, historicoInicial] = await Promise.all([
+    getMargemConfig(),
+    getHistoricoProduto(id, "30d"),
+  ]);
+
   return (
     <>
       <ProductForm
@@ -35,6 +44,11 @@ export default async function EditarProdutoPage({ params }: PageProps) {
         userRole={role}
         categories={categories}
         initialCategoryIds={initialCategoryIds}
+      />
+      <ProdutoHistoricoSection
+        productId={id}
+        margemConfig={margemConfig}
+        historicoInicial={historicoInicial}
       />
       <ToastContainer />
     </>

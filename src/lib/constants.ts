@@ -1,10 +1,19 @@
-export const COTACAO_STATUS_LABELS = {
+// Valores reais confirmados ao vivo contra o Supabase (GET /rest/v1/, enum
+// public.cotacao_status) — NÃO 'em_andamento'/'encerrada', que nunca
+// existiram no banco real (ver CLAUDE.md "Known Issues" e o plano da sessão
+// de reconstrução do backend cotacoes/propostas).
+export type CotacaoStatus = 'rascunho' | 'aberta' | 'fechada' | 'cancelada'
+
+export const COTACAO_STATUS_LABELS: Record<CotacaoStatus, string> = {
+  rascunho: 'Rascunho',
   aberta: 'Aberta',
-  em_andamento: 'Em Andamento',
-  encerrada: 'Encerrada',
+  fechada: 'Fechada',
+  cancelada: 'Cancelada',
 } as const
 
+// Valores reais confirmados ao vivo (enum public.proposta_status) — sem 'recebida'.
 export const PROPOSTA_STATUS_LABELS = {
+  rascunho: 'Rascunho',
   enviada: 'Enviada',
   aceita: 'Aceita',
   recusada: 'Recusada',
@@ -58,3 +67,16 @@ export const UNIDADES = [
   'fardo',
   'dúzia',
 ] as const
+
+// ─── Scoring system for supplier ranking ───
+// Points awarded by position (easily adjustable)
+export const SCORING_RULES: Record<number, number> = {
+  1: 5,  // 1º lugar → 5 pontos
+  2: 3,  // 2º lugar → 3 pontos
+  3: 1,  // 3º lugar → 1 ponto
+}
+export const SCORING_DEFAULT = 0 // positions beyond 3rd
+
+// ─── Margin calculation ───
+export const DEFAULT_MARGIN_PERCENT = 28.5
+

@@ -1,6 +1,6 @@
 'use server'
 
-import { getUserRole } from '@/lib/roles.server'
+import { getCurrentUserRole } from '@/lib/roles.server'
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 
@@ -10,10 +10,10 @@ export async function addProductQuote(
   price: number
 ) {
   const supabase = await createClient()
-  const role = await getUserRole()
+  const role = await getCurrentUserRole()
 
-  if (role !== 'admin' && role !== 'moderador') {
-    return { error: 'Sem permissão para adicionar cotações.' }
+  if (role !== 'admin') {
+    return { error: 'Sem permissao para adicionar cotacoes.' }
   }
 
   if (!companyName?.trim()) {

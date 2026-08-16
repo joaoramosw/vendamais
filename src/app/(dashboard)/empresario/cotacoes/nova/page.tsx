@@ -1,6 +1,14 @@
 "use client";
 
-import { buscarProdutoPorBarcode, criarCotacao } from "@/actions/cotacoes";
+import { buscarProdutoPorBarcode } from "@/actions/cotacoes";
+import {
+    convidarPorUsuarios,
+    enviarCotacao,
+    salvarRascunho,
+    type EnviarCotacaoItemPayload,
+} from "@/lib/api/cotacoes-api";
+import { FornecedorSelector } from "@/components/cotacoes/FornecedorSelector";
+import { ProdutoNomeAutocomplete } from "@/components/produtos/ProdutoNomeAutocomplete";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -14,11 +22,15 @@ import {
     Info,
     Package,
     Plus,
+    Save,
     Search,
+    Send,
     Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 
 /* ─── Step definitions ─── */
 const steps: StepperStep[] = [
@@ -56,14 +68,17 @@ const defaultItem = (): ItemForm => ({
 });
 
 export default function NovaCotacaoPage() {
+  const router = useRouter();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const publishingRef = useRef(false);
 
   // Step 1 — Dados básicos
   const [titulo, setTitulo] = useState("");
   const [prazo, setPrazo] = useState("");
   const [descricao, setDescricao] = useState("");
+  const [fornecedoresSelecionados, setFornecedoresSelecionados] = useState<Set<string>>(new Set());
 
   // Step 2 — Itens
   const [itens, setItens] = useState<ItemForm[]>([defaultItem()]);
@@ -137,16 +152,8 @@ export default function NovaCotacaoPage() {
 
   const prev = () => setCurrentStep(currentStep - 1);
 
-  async function handleSubmit() {
-    setLoading(true);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append("titulo", titulo);
-    formData.append("descricao", descricao);
-    formData.append("data_limite", prazo);
-
-    const validItens = itens
+  function buildItensPayload(): EnviarCotacaoItemPayload[] {
+    return itens
       .filter((item) => item.nome_produto.trim())
       .map((item) => ({
         nome_produto: item.nome_produto.trim(),
@@ -155,17 +162,77 @@ export default function NovaCotacaoPage() {
         categoria: item.categoria,
         estoque_atual: item.estoque_atual ? parseFloat(item.estoque_atual) : undefined,
         quantidade_sugerida: item.quantidade_sugerida ? parseFloat(item.quantidade_sugerida) : 1,
+        unidade: item.tipo_unidade,
         tipo_unidade: item.tipo_unidade,
         quantidade: item.quantidade_sugerida ? parseFloat(item.quantidade_sugerida) : 1,
         observacao: item.observacao || undefined,
         product_id: item.product_id,
       }));
+  }
 
-    formData.append("itens", JSON.stringify(validItens));
+  async function handleSaveDraft() {
+    setLoading(true);
+    setError(null);
 
-    const result = await criarCotacao(formData);
-    if (result?.error) {
+    const result = await salvarRascunho({
+      titulo,
+      data_limite: prazo || undefined,
+      itens: buildItensPayload(),
+    });
+
+    if (!result.success) {
       setError(result.error);
+      toast.error(result.error);
+      setLoading(false);
+      return;
+    }
+
+    toast.success("Rascunho salvo com sucesso!");
+    router.push("/empresario/cotacoes");
+  }
+
+  async function handlePublish() {
+    if (publishingRef.current) return;
+    publishingRef.current = true;
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Backend novo faz criar -> publicar em 1 chamada, sem depender do embed
+      // PostgREST cotacoes<->cotacao_itens (a FK que nunca existiu no banco real).
+      const result = await enviarCotacao({
+        titulo,
+        data_limite: prazo || undefined,
+        itens: buildItensPayload(),
+      });
+
+      if (!result.success) {
+        setError(result.error);
+        toast.error(result.error);
+        return;
+      }
+
+      if (fornecedoresSelecionados.size > 0) {
+        try {
+          const criados = await convidarPorUsuarios(result.id, Array.from(fornecedoresSelecionados));
+          if (criados.length > 0) {
+            toast.success(`${criados.length} fornecedor(es) convidado(s)!`);
+          }
+        } catch (conviteError) {
+          toast.warning(
+            conviteError instanceof Error
+              ? `Cotação publicada, mas houve erro ao convidar fornecedores: ${conviteError.message}`
+              : "Cotação publicada, mas houve erro ao convidar fornecedores.",
+          );
+        }
+      }
+
+      toast.success("Cotação publicada com sucesso! Fornecedores já podem enviar propostas.");
+      // Mesmo destino do envio pela lista de cotação: abre a cotação recém-
+      // criada, em vez de deixar o usuário procurar o card na listagem.
+      router.push(`/empresario/cotacoes/${result.id}`);
+    } finally {
+      publishingRef.current = false;
       setLoading(false);
     }
   }
@@ -176,13 +243,13 @@ export default function NovaCotacaoPage() {
       <div className="flex items-center gap-3">
         <Link
           href="/empresario/cotacoes"
-          className="p-2 rounded-[var(--radius-md)] text-gray-500 hover:text-gray-300 hover:bg-white/[0.04] transition-colors"
+          className="p-2 rounded-[var(--radius-md)] text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.04] transition-colors"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-2xl font-bold text-white">Nova Cotação</h1>
-          <p className="text-sm text-gray-400">
+          <h1 className="text-2xl font-bold text-neutral-900 dark:text-white">Nova Cotação</h1>
+          <p className="text-sm text-neutral-400">
             Defina os itens e as unidades para que os fornecedores respondam corretamente
           </p>
         </div>
@@ -192,7 +259,7 @@ export default function NovaCotacaoPage() {
       <Stepper steps={steps} currentStep={currentStep} />
 
       {error && (
-        <div className="bg-red-500/10 text-red-400 p-4 rounded-[var(--radius-lg)] border border-red-500/20 text-sm flex gap-3 animate-fade-in">
+        <div className="bg-danger-500/10 text-danger-400 p-4 rounded-[var(--radius-lg)] border border-danger-500/20 text-sm flex gap-3 animate-fade-in">
           <Info className="h-5 w-5 shrink-0" />
           {error}
         </div>
@@ -227,6 +294,15 @@ export default function NovaCotacaoPage() {
                 onChange={(e) => setDescricao(e.target.value)}
                 rows={3}
               />
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-neutral-400">
+                  Convidar fornecedores ao publicar (opcional)
+                </label>
+                <FornecedorSelector
+                  selected={fornecedoresSelecionados}
+                  onChange={setFornecedoresSelecionados}
+                />
+              </div>
             </div>
           )}
 
@@ -235,20 +311,20 @@ export default function NovaCotacaoPage() {
             <div className="space-y-5 animate-fade-in">
               {/* Toolbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/[0.06]">
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-neutral-400">
                   Adicione os produtos para cotar. Os fornecedores verão: nome, barcode, categoria e unidade.
                 </p>
                 <div className="flex items-center gap-2">
                   {/* Bulk unit selector */}
                   <div className="flex items-center gap-2 bg-white/[0.04] rounded-[var(--radius-md)] px-3 py-1.5 border border-white/[0.06]">
-                    <span className="text-xs text-gray-400 whitespace-nowrap">Def. todos:</span>
+                    <span className="text-xs text-neutral-400 whitespace-nowrap">Def. todos:</span>
                     <select
                       value={bulkUnit}
                       onChange={(e) => setBulkUnit(e.target.value as UnitType)}
                       className="bg-transparent text-xs text-white border-none outline-none cursor-pointer"
                     >
                       {UNIT_TYPES.map((u) => (
-                        <option key={u} value={u} className="bg-[#0f1720]">
+                        <option key={u} value={u} className="bg-neutral-900">
                           {UNIT_TYPE_LABELS[u]}
                         </option>
                       ))}
@@ -268,18 +344,18 @@ export default function NovaCotacaoPage() {
                 {itens.map((item, index) => (
                   <div
                     key={item.id}
-                    className="relative p-4 bg-[#0f1720] rounded-[var(--radius-lg)] border border-white/[0.06] group animate-fade-in"
+                    className="relative p-4 bg-neutral-900 rounded-[var(--radius-lg)] border border-white/[0.06] group animate-fade-in"
                   >
                     {/* Item header */}
                     <div className="flex items-center justify-between mb-4">
-                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                      <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-2">
                         <Package className="h-3.5 w-3.5" />
                         Item {index + 1}
                       </span>
                       {itens.length > 1 && (
                         <button
                           onClick={() => removeItem(item.id)}
-                          className="p-1 text-gray-600 hover:text-red-400 transition-colors cursor-pointer"
+                          className="p-1 text-neutral-600 hover:text-danger-400 transition-colors cursor-pointer"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -300,7 +376,7 @@ export default function NovaCotacaoPage() {
                           <button
                             type="button"
                             onClick={() => handleBarcodeSearch(item.id, item.codigo_barras)}
-                            className="absolute right-2 bottom-2 p-1 text-gray-500 hover:text-indigo-400 transition-colors cursor-pointer"
+                            className="absolute right-2 bottom-2 p-1 text-neutral-500 hover:text-primary-400 transition-colors cursor-pointer"
                           >
                             {item._barcodeLoading ? (
                               <Search className="h-4 w-4 animate-pulse" />
@@ -309,18 +385,32 @@ export default function NovaCotacaoPage() {
                             )}
                           </button>
                           {item._barcodeFound === true && (
-                            <p className="text-[10px] text-emerald-400 mt-1">✓ Produto encontrado no catálogo</p>
+                            <p className="text-[10px] text-success-400 mt-1">✓ Produto encontrado no catálogo</p>
                           )}
                           {item._barcodeFound === false && (
                             <p className="text-[10px] text-yellow-500 mt-1">Produto não encontrado — preencha manualmente</p>
                           )}
                         </div>
                         <div className="md:col-span-8">
-                          <Input
-                            label="Nome do Produto *"
-                            placeholder="Nome do item"
+                          <ProdutoNomeAutocomplete
                             value={item.nome_produto}
-                            onChange={(e) => updateItem(item.id, "nome_produto", e.target.value)}
+                            onChange={(value) => updateItem(item.id, "nome_produto", value)}
+                            onSelectProduto={(produto) => {
+                              setItens((prev) =>
+                                prev.map((i) =>
+                                  i.id === item.id
+                                    ? {
+                                        ...i,
+                                        nome_produto: produto.name,
+                                        descricao: produto.description || "",
+                                        categoria: produto.category || "outros",
+                                        product_id: produto.id,
+                                        _barcodeFound: true,
+                                      }
+                                    : i
+                                )
+                              );
+                            }}
                           />
                         </div>
                       </div>
@@ -357,7 +447,7 @@ export default function NovaCotacaoPage() {
                             value={item.estoque_atual}
                             onChange={(e) => updateItem(item.id, "estoque_atual", e.target.value)}
                           />
-                          <p className="text-[10px] text-gray-600 mt-1">Interno — não visível ao fornecedor</p>
+                          <p className="text-[10px] text-neutral-600 mt-1">Interno — não visível ao fornecedor</p>
                         </div>
                         <div className="col-span-1 md:col-span-3">
                           <Input
@@ -370,24 +460,24 @@ export default function NovaCotacaoPage() {
                           />
                         </div>
                         <div className="col-span-2 md:col-span-3">
-                          <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">
                             Unidade Comercial *
                           </label>
                           <div className="relative">
                             <select
                               value={item.tipo_unidade}
                               onChange={(e) => updateItem(item.id, "tipo_unidade", e.target.value as UnitType)}
-                              className="w-full h-10 bg-[#1a2535] border border-white/[0.08] rounded-[var(--radius-md)] text-white text-sm pl-3 pr-8 appearance-none outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+                              className="w-full h-10 bg-neutral-800 border border-white/[0.08] rounded-[var(--radius-md)] text-white text-sm pl-3 pr-8 appearance-none outline-none focus:border-primary-500 transition-colors cursor-pointer"
                             >
                               {UNIT_TYPES.map((u) => (
-                                <option key={u} value={u} className="bg-[#0f1720]">
+                                <option key={u} value={u} className="bg-neutral-900">
                                   {u} — {UNIT_TYPE_LABELS[u]}
                                 </option>
                               ))}
                             </select>
-                            <ChevronDown className="absolute right-2 top-3 h-4 w-4 text-gray-500 pointer-events-none" />
+                            <ChevronDown className="absolute right-2 top-3 h-4 w-4 text-neutral-500 pointer-events-none" />
                           </div>
-                          <p className="text-[10px] text-gray-600 mt-1">
+                          <p className="text-[10px] text-neutral-600 mt-1">
                             Fornecedor cotará preço por {UNIT_TYPE_LABELS[item.tipo_unidade]}
                           </p>
                         </div>
@@ -415,12 +505,12 @@ export default function NovaCotacaoPage() {
           {/* ─── Step 3: Revisão ─── */}
           {currentStep === 2 && (
             <div className="space-y-6 animate-fade-in">
-              <div className="bg-indigo-500/10 p-4 rounded-[var(--radius-lg)] border border-indigo-500/20">
-                <h3 className="text-sm font-semibold text-indigo-300 mb-2">Dados da Cotação</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-300">
+              <div className="bg-primary-500/10 p-4 rounded-[var(--radius-lg)] border border-primary-500/20">
+                <h3 className="text-sm font-semibold text-primary-300 mb-2">Dados da Cotação</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-neutral-300">
                   <p><span className="font-medium">Título:</span> {titulo}</p>
                   <p><span className="font-medium">Prazo:</span> {prazo ? new Date(prazo).toLocaleString("pt-BR") : "Não definido"}</p>
-                  {descricao && <p className="col-span-2 text-gray-400 italic">{descricao}</p>}
+                  {descricao && <p className="col-span-2 text-neutral-400 italic">{descricao}</p>}
                 </div>
               </div>
 
@@ -430,7 +520,7 @@ export default function NovaCotacaoPage() {
                 </h3>
                 <div className="border border-white/[0.06] rounded-[var(--radius-md)] overflow-hidden">
                   <table className="w-full text-sm">
-                    <thead className="bg-white/[0.04] text-gray-400 text-xs uppercase font-medium">
+                    <thead className="bg-white/[0.04] text-neutral-400 text-xs uppercase font-medium">
                       <tr>
                         <th className="px-4 py-3 text-left">Produto</th>
                         <th className="px-4 py-3 text-left">Barcode</th>
@@ -446,25 +536,25 @@ export default function NovaCotacaoPage() {
                         .map((item) => (
                           <tr key={item.id}>
                             <td className="px-4 py-3">
-                              <p className="text-gray-200 font-medium">{item.nome_produto}</p>
+                              <p className="text-neutral-200 font-medium">{item.nome_produto}</p>
                               {item.descricao && (
-                                <p className="text-[10px] text-gray-500 italic mt-0.5">{item.descricao}</p>
+                                <p className="text-[10px] text-neutral-500 italic mt-0.5">{item.descricao}</p>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-gray-400 font-mono text-xs">
+                            <td className="px-4 py-3 text-neutral-400 font-mono text-xs">
                               {item.codigo_barras || "—"}
                             </td>
-                            <td className="px-4 py-3 text-gray-400 capitalize">
+                            <td className="px-4 py-3 text-neutral-400 capitalize">
                               {item.categoria || "—"}
                             </td>
-                            <td className="px-4 py-3 text-center text-gray-500 text-xs">
+                            <td className="px-4 py-3 text-center text-neutral-500 text-xs">
                               {item.estoque_atual || "—"}
                             </td>
-                            <td className="px-4 py-3 text-center text-gray-300 font-medium">
+                            <td className="px-4 py-3 text-center text-neutral-300 font-medium">
                               {item.quantidade_sugerida || 1}
                             </td>
                             <td className="px-4 py-3 text-center">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-500/10 text-indigo-400 rounded text-xs font-bold">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary-500/10 text-primary-400 rounded text-xs font-bold">
                                 {item.tipo_unidade}
                               </span>
                             </td>
@@ -475,9 +565,9 @@ export default function NovaCotacaoPage() {
                 </div>
               </div>
 
-              <div className="flex items-start gap-3 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-[var(--radius-lg)]">
-                <Info className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
-                <p className="text-xs text-emerald-400/80 leading-relaxed">
+              <div className="flex items-start gap-3 p-4 bg-success-500/5 border border-success-500/10 rounded-[var(--radius-lg)]">
+                <Info className="h-4 w-4 text-success-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-success-400/80 leading-relaxed">
                   Os fornecedores receberão: <strong>Nome, Barcode, Categoria</strong> e a <strong>Unidade Comercial</strong>.
                   Campos de <em>Estoque</em> não serão compartilhados.
                 </p>
@@ -501,10 +591,16 @@ export default function NovaCotacaoPage() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={handleSubmit} loading={loading}>
-              Publicar Cotação
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button variant="secondary" onClick={handleSaveDraft} loading={loading} disabled={loading}>
+                <Save className="h-4 w-4" />
+                Salvar Rascunho
+              </Button>
+              <Button onClick={handlePublish} loading={loading} disabled={loading}>
+                <Send className="h-4 w-4" />
+                Publicar Cotação
+              </Button>
+            </div>
           )}
         </CardFooter>
       </Card>

@@ -1,98 +1,24 @@
-import { Badge } from "@/components/ui/badge"
-import {
-    PROPOSTA_STATUS_LABELS,
-} from "@/lib/constants"
+import { MinhasPropostasClient } from "@/components/propostas/MinhasPropostasClient"
 import { createClient } from "@/lib/supabase/server"
-import { formatCurrency, formatDate } from "@/lib/utils"
 import { redirect } from "next/navigation"
 
-export default async function MinhasPropostasPage() {
+export default async function MinhasPropostasPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; aberta?: string }>
+}) {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  const { status, aberta } = await searchParams
 
-  const { data: propostas } = await supabase
-    .from("propostas")
-    .select(
-      `
-      *,
-      cotacoes:cotacao_id (
-        titulo,
-        status,
-        profiles:empresario_id (nome, empresa)
-      )
-    `
-    )
-    .eq("fornecedor_id", user.id)
-    .order("created_at", { ascending: false })
-
-  const statusColors: Record<string, "default" | "success" | "warning"> = {
-    enviada: "warning",
-    aceita: "success",
-    recusada: "default",
+  if (!user) {
+    const target = aberta
+      ? `/fornecedor/propostas?aberta=${aberta}`
+      : "/fornecedor/propostas"
+    redirect(`/login?redirect=${encodeURIComponent(target)}`)
   }
 
-  return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">
-          Minhas Propostas
-        </h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Acompanhe o status das suas propostas
-        </p>
-      </div>
-
-      {!propostas || propostas.length === 0 ? (
-        <div className="bg-[#1F2937] rounded-[var(--radius-lg)] border border-white/[0.06] p-12 text-center shadow-xs">
-          <p className="text-gray-400">
-            Você ainda não enviou nenhuma proposta.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {propostas.map((proposta) => (
-            <div
-              key={proposta.id}
-              className="bg-[#1F2937] rounded-[var(--radius-lg)] border border-white/[0.06] p-5 shadow-xs"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-sm font-semibold text-gray-200 truncate">
-                      {(proposta as any).cotacoes?.titulo}
-                    </h3>
-                    <Badge variant={statusColors[proposta.status]}>
-                      {
-                        PROPOSTA_STATUS_LABELS[
-                          proposta.status as keyof typeof PROPOSTA_STATUS_LABELS
-                        ]
-                      }
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>
-                      {(proposta as any).cotacoes?.profiles?.empresa ||
-                        (proposta as any).cotacoes?.profiles?.nome}
-                    </span>
-                    <span>Enviada em {formatDate(proposta.created_at)}</span>
-                  </div>
-                </div>
-                <div className="text-right ml-4">
-                  <p className="text-lg font-bold text-white">
-                    {proposta.valor_total
-                      ? formatCurrency(proposta.valor_total)
-                      : "—"}
-                  </p>
-                  <p className="text-xs text-gray-500">Valor total</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+  return <MinhasPropostasClient initialStatus={status} initialAbertaId={aberta} />
 }

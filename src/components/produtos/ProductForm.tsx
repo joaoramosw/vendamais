@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useRef, useState } from "react";
 import { BarcodeScanner } from "./BarcodeScanner";
 
@@ -60,10 +60,10 @@ function UploadProgress({ state }: { state: UploadState }) {
 
   const colorClass =
     state.stage === "error"
-      ? "bg-red-500"
+      ? "bg-danger-500"
       : state.stage === "done"
-        ? "bg-emerald-500"
-        : "bg-indigo-500";
+        ? "bg-success-500"
+        : "bg-primary-500";
 
   return (
     <div className="space-y-1.5 animate-fade-in">
@@ -72,13 +72,13 @@ function UploadProgress({ state }: { state: UploadState }) {
           {state.message}
         </span>
         {state.stage === "done" && (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success-500" />
         )}
         {state.stage === "error" && (
-          <X className="h-3.5 w-3.5 text-red-400" />
+          <X className="h-3.5 w-3.5 text-danger-400" />
         )}
         {(state.stage === "compressing" || state.stage === "uploading") && (
-          <Loader2 className="h-3.5 w-3.5 text-indigo-400 animate-spin" />
+          <Loader2 className="h-3.5 w-3.5 text-primary-400 animate-spin" />
         )}
       </div>
       <div className="w-full h-1 bg-neutral-200 dark:bg-neutral-700 rounded-full overflow-hidden">
@@ -106,6 +106,7 @@ export function ProductForm({
   initialCategoryIds = [],
 }: ProductFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isEditing = !!product;
   const canUpdate = checkPermission(userRole, "update");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -113,7 +114,9 @@ export function ProductForm({
   // Form state
   const [name, setName] = useState(product?.name ?? "");
   const [description, setDescription] = useState(product?.description ?? "");
-  const [barcode, setBarcode] = useState(product?.barcode ?? "");
+  const [barcode, setBarcode] = useState(
+    product?.barcode ?? searchParams.get("barcode") ?? ""
+  );
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(initialCategoryIds);
   const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false);
   const [categorySearch, setCategorySearch] = useState("");
@@ -166,7 +169,6 @@ export function ProductForm({
           showToast("Produto atualizado com sucesso!", "success");
           await assignProductCategories(product.id, selectedCategoryIds);
           router.push("/empresario/produtos");
-          router.refresh();
         }
       } else {
         const result = await createProduct(formData);
@@ -178,7 +180,6 @@ export function ProductForm({
             await assignProductCategories(result.productId, selectedCategoryIds);
           }
           router.push("/empresario/produtos");
-          router.refresh();
         }
       }
     } catch {
@@ -413,7 +414,7 @@ export function ProductForm({
                     <Button
                       variant="secondary"
                       size="icon"
-                      onClick={() => setShowScanner(true)}
+                      onClick={() => setShowScanner((prev) => !prev)}
                       title="Escanear código"
                     >
                       <ScanBarcode className="h-4 w-4" />
@@ -466,7 +467,7 @@ export function ProductForm({
                       className="w-full border border-neutral-200 dark:border-neutral-600 rounded-[var(--radius-md)] px-3.5 py-2.5 text-sm bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-100 placeholder:text-neutral-400 dark:placeholder:text-neutral-500 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 outline-none transition-all"
                     />
                     {categoryDropdownOpen && (
-                      <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-[#1a2332] border border-white/10 rounded-[var(--radius-md)] shadow-lg max-h-48 overflow-y-auto">
+                      <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-neutral-900 border border-white/10 rounded-[var(--radius-md)] shadow-lg max-h-48 overflow-y-auto">
                         {categories
                           .filter(
                             (c) =>
@@ -482,7 +483,7 @@ export function ProductForm({
                                 setCategorySearch("");
                                 setCategoryDropdownOpen(false);
                               }}
-                              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-200 hover:bg-white/[0.06] transition-colors cursor-pointer"
+                              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-neutral-200 hover:bg-white/[0.06] transition-colors cursor-pointer"
                             >
                               <div
                                 className="h-3 w-3 rounded-full shrink-0"
@@ -496,7 +497,7 @@ export function ProductForm({
                             !selectedCategoryIds.includes(c.id) &&
                             c.name.toLowerCase().includes(categorySearch.toLowerCase())
                         ).length === 0 && (
-                          <p className="px-3 py-2 text-xs text-gray-500">
+                          <p className="px-3 py-2 text-xs text-neutral-500">
                             Nenhuma categoria encontrada.
                           </p>
                         )}
@@ -593,7 +594,7 @@ export function ProductForm({
                           className={cn(
                             "text-sm font-bold",
                             i === 0
-                              ? "text-emerald-600 dark:text-emerald-400"
+                              ? "text-success-600 dark:text-success-400"
                               : "text-neutral-500 dark:text-neutral-400"
                           )}
                         >
@@ -700,7 +701,7 @@ export function ProductForm({
                     size="sm"
                     onClick={() => setShowRemoveImageConfirm(true)}
                     disabled={isUploading}
-                    className="text-red-400 hover:text-red-300"
+                    className="text-danger-400 hover:text-danger-300"
                   >
                     <Trash2 className="h-4 w-4" />
                     Remover

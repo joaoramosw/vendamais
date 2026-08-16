@@ -18,8 +18,8 @@ const activityConfig: Record<
 > = {
   cotacao_criada: {
     icon: FileText,
-    color: "text-indigo-400",
-    dotColor: "bg-indigo-500",
+    color: "text-primary-400",
+    dotColor: "bg-primary-500",
   },
   proposta_recebida: {
     icon: Inbox,
@@ -28,8 +28,8 @@ const activityConfig: Record<
   },
   cotacao_encerrada: {
     icon: XCircle,
-    color: "text-amber-400",
-    dotColor: "bg-amber-500",
+    color: "text-warning-400",
+    dotColor: "bg-warning-500",
   },
   proposta_enviada: {
     icon: Send,
@@ -38,8 +38,8 @@ const activityConfig: Record<
   },
   proposta_aceita: {
     icon: CheckCircle2,
-    color: "text-emerald-400",
-    dotColor: "bg-emerald-500",
+    color: "text-success-400",
+    dotColor: "bg-success-500",
   },
 }
 
@@ -51,11 +51,11 @@ export function RecentActivity({ items }: RecentActivityProps) {
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
-        <div className="h-12 w-12 rounded-full bg-white/[0.04] flex items-center justify-center mb-3">
-          <Inbox className="h-6 w-6 text-gray-500" />
+        <div className="h-12 w-12 rounded-full bg-neutral-100 dark:bg-white/[0.04] flex items-center justify-center mb-3">
+          <Inbox className="h-6 w-6 text-neutral-500" />
         </div>
-        <p className="text-sm text-gray-400">Nenhuma atividade recente</p>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-sm text-neutral-400">Nenhuma atividade recente</p>
+        <p className="text-xs text-neutral-500 mt-1">
           Suas ações aparecerão aqui
         </p>
       </div>
@@ -72,34 +72,34 @@ export function RecentActivity({ items }: RecentActivityProps) {
           <Link
             href="/empresario/cotacoes"
             key={item.id}
-            className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06] transition-all duration-200"
+            className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl hover:bg-neutral-100 dark:hover:bg-white/[0.04] border border-transparent hover:border-neutral-200 dark:hover:border-white/[0.06] transition-all duration-200"
           >
             <div className="flex items-start gap-3 flex-1 min-w-0">
               <div className="relative mt-0.5 shrink-0">
                 <div
-                  className={`h-10 w-10 rounded-full bg-white/[0.04] flex items-center justify-center ${config.color} group-hover:scale-110 transition-transform`}
+                  className={`h-10 w-10 rounded-full bg-neutral-100 dark:bg-white/[0.04] flex items-center justify-center ${config.color} group-hover:scale-110 transition-transform`}
                 >
                   <Icon className="h-5 w-5" />
                 </div>
                 <div
-                  className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ${config.dotColor} ring-2 ring-[#1F2937]`}
+                  className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ${config.dotColor} ring-2 ring-white dark:ring-neutral-800`}
                 />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-200 group-hover:text-white transition-colors">
+                <p className="text-sm font-semibold text-neutral-900 dark:text-neutral-200 dark:group-hover:text-white transition-colors">
                   {item.title}
                 </p>
-                <p className="text-xs text-gray-500 mt-1 line-clamp-2 md:line-clamp-1">
+                <p className="text-xs text-neutral-500 mt-1 line-clamp-2 md:line-clamp-1">
                   {item.description}
                 </p>
               </div>
             </div>
             
             <div className="flex items-center gap-4 sm:flex-col sm:items-end sm:gap-1 pl-12 sm:pl-0 shrink-0">
-              <span className="text-[11px] font-medium text-gray-500">
+              <span className="text-[11px] font-medium text-neutral-500">
                 {formatRelativeDate(item.created_at)}
               </span>
-              <ArrowRight className="h-4 w-4 text-gray-600 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 hidden sm:block" />
+              <ArrowRight className="h-4 w-4 text-neutral-600 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 hidden sm:block" />
             </div>
           </Link>
         )

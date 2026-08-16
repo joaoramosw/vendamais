@@ -18,27 +18,27 @@ const toastConfig: Record<
 > = {
   success: {
     icon: CheckCircle,
-    bg: "bg-emerald-50 dark:bg-emerald-950/80",
-    border: "border-emerald-200 dark:border-emerald-800",
-    text: "text-emerald-800 dark:text-emerald-200",
+    bg: "bg-success-50 dark:bg-success-950/80",
+    border: "border-success-200 dark:border-success-800",
+    text: "text-success-800 dark:text-success-200",
   },
   error: {
     icon: XCircle,
-    bg: "bg-red-50 dark:bg-red-950/80",
-    border: "border-red-200 dark:border-red-800",
-    text: "text-red-800 dark:text-red-200",
+    bg: "bg-danger-50 dark:bg-danger-950/80",
+    border: "border-danger-200 dark:border-danger-800",
+    text: "text-danger-800 dark:text-danger-200",
   },
   warning: {
     icon: AlertTriangle,
-    bg: "bg-amber-50 dark:bg-amber-950/80",
-    border: "border-amber-200 dark:border-amber-800",
-    text: "text-amber-800 dark:text-amber-200",
+    bg: "bg-warning-50 dark:bg-warning-950/80",
+    border: "border-warning-200 dark:border-warning-800",
+    text: "text-warning-800 dark:text-warning-200",
   },
   info: {
     icon: Info,
-    bg: "bg-blue-50 dark:bg-blue-950/80",
-    border: "border-blue-200 dark:border-blue-800",
-    text: "text-blue-800 dark:text-blue-200",
+    bg: "bg-info-50 dark:bg-info-950/80",
+    border: "border-info-200 dark:border-info-800",
+    text: "text-info-800 dark:text-info-200",
   },
 };
 

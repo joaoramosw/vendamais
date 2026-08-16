@@ -46,8 +46,8 @@ export function MiniChart({
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-300">{label}</h3>
-        <span className="text-xs text-gray-500">
+        <h3 className="text-sm font-semibold text-neutral-300">{label}</h3>
+        <span className="text-xs text-neutral-500">
           {data.reduce((sum, d) => sum + d.value, 0)} total
         </span>
       </div>
@@ -113,7 +113,7 @@ export function MiniChart({
           {data.map((d, i) => (
             <span
               key={i}
-              className="text-[10px] text-gray-600 font-medium"
+              className="text-[10px] text-neutral-600 font-medium"
             >
               {d.label}
             </span>

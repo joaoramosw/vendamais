@@ -1,64 +1,103 @@
 "use client";
 
-import { buscarProdutoPorBarcode, criarCotacao } from "@/actions/cotacoes";
+import { buscarProdutoPorBarcode } from "@/actions/cotacoes";
+import { looksLikeBarcode } from "@/lib/barcode";
+import {
+    convidarFornecedor,
+    convidarPorUsuarios,
+    enviarCotacao,
+    type FornecedorConvidadoRow,
+} from "@/lib/api/cotacoes-api";
+import { ConvitesCriadosModal } from "@/components/cotacoes/ConvitesCriadosList";
+import { FornecedorSelector } from "@/components/cotacoes/FornecedorSelector";
+import { formatPhone, isValidBrPhone } from "@/lib/whatsapp";
+import { ObservationHistoryModal } from "@/components/cotacoes/ObservationHistoryModal";
 import { BarcodeScanner } from "@/components/produtos/BarcodeScanner";
 import { ImagePreviewModal } from "@/components/produtos/ImagePreviewModal";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter } from "@/components/ui/card";
 import {
-  ColumnConfigModal,
-  loadColumnOrder,
-  saveColumnOrder,
-  type ColumnDef,
+    ColumnConfigModal,
+    loadColumnLabels,
+    loadColumnOrder,
+    saveColumnLabels,
+    saveColumnOrder,
+    type ColumnDef,
 } from "@/components/ui/column-config-modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { EditableNumberCell } from "@/components/ui/editable-number-cell";
 import { Input } from "@/components/ui/input";
 import {
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
+    Modal,
+    ModalBody,
+    ModalFooter,
+    ModalHeader,
 } from "@/components/ui/modal";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
 } from "@/components/ui/table";
-import { showToast } from "@/components/ui/toast";
+import { toast } from "sonner";
 import { UNIT_TYPE_LABELS, UNIT_TYPES, type UnitType } from "@/lib/constants";
 import { useDraftList, type DraftItem } from "@/lib/hooks/useDraftList";
+import { useOfflineSync } from "@/lib/hooks/useOfflineSync";
 import { applySorting, useTableSort } from "@/lib/hooks/useTableSort";
 import { formatCurrency } from "@/lib/utils";
 import {
-  ArrowRight,
-  ArrowUp,
-  Camera,
-  ChevronDown,
-  ClipboardList,
-  Edit,
-  Loader2,
-  Package,
-  Search,
-  Send,
-  Settings2,
-  Trash2,
-  X
+    AlertCircle,
+    ArrowRight,
+    ArrowUp,
+    Camera,
+    ChevronDown,
+    ClipboardList,
+    Edit,
+    Loader2,
+    MessageSquarePlus,
+    Package,
+    Search,
+    Send,
+    Settings2,
+    Trash2,
+    X
 } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+/**
+ * Feedback desta tela via **sonner**, não pelo `showToast` de
+ * `@/components/ui/toast`.
+ *
+ * O sistema legado só desenha se a página montar um `<ToastContainer/>` — e
+ * `/empresario/lista-cotacao` nunca montou. Resultado: todos os avisos daqui,
+ * inclusive o "Cotação publicada com sucesso", eram emitidos e descartados em
+ * silêncio. O sonner é global (`<SonnerToaster/>` no layout raiz) e, por isso,
+ * também sobrevive ao redirect que acontece logo depois do envio — que é
+ * exatamente o que este fluxo precisa. Mantido o nome `showToast` para não
+ * reescrever as 20 chamadas do arquivo.
+ */
+function showToast(
+  message: string,
+  type: "success" | "error" | "warning" | "info" = "success",
+) {
+  if (type === "error") toast.error(message);
+  else if (type === "warning") toast.warning(message);
+  else if (type === "info") toast.info(message);
+  else toast.success(message);
+}
+
 /* ─── Column definitions ─── */
 const DRAFT_COLUMNS: ColumnDef[] = [
-  { id: "select", label: "Selecionar", fixed: true },
+  { id: "select", label: "Selecionar", fixed: true, renamable: false },
   { id: "foto", label: "Foto" },
   { id: "produto", label: "Produto" },
   { id: "preco", label: "Preço unit." },
   { id: "estoque", label: "Estoque" },
-  { id: "sugerido", label: "Sugerido" },
+  { id: "sugerido", label: "Qtd. cotacao" },
   { id: "unidade", label: "Unidade" },
   { id: "acoes", label: "Ações", fixed: true },
 ];
@@ -66,6 +105,18 @@ const DRAFT_DEFAULT_ORDER = DRAFT_COLUMNS.map((c) => c.id);
 const DRAFT_COL_STORAGE_KEY = "vendamais_draft_columns";
 const DEFAULT_UNIT_STORAGE_KEY = "vendamais_default_unit";
 const UNIT_OPTIONS = UNIT_TYPES.map((u) => ({ value: u, label: UNIT_TYPE_LABELS[u] }));
+
+interface CotacaoItemPayload {
+  nome_produto: string;
+  codigo_barras?: string;
+  categoria?: string;
+  estoque_atual?: number;
+  quantidade_sugerida: number;
+  unidade: DraftItem["tipoUnidade"];
+  tipo_unidade: DraftItem["tipoUnidade"];
+  quantidade: number;
+  product_id: string;
+}
 
 function loadDefaultUnit(): string {
   if (typeof window === "undefined") return "CX";
@@ -81,78 +132,13 @@ function saveDefaultUnit(unit: string) {
   localStorage.setItem(DEFAULT_UNIT_STORAGE_KEY, unit);
 }
 
-/* ─── Editable Sugerido Cell ─── */
-function EditableSugerido({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (v: number) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [localVal, setLocalVal] = useState(String(value));
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const startEditing = () => {
-    setLocalVal(value === 0 ? "" : String(value));
-    setEditing(true);
-    setTimeout(() => inputRef.current?.focus(), 0);
-  };
-
-  const commit = () => {
-    const parsed = parseInt(localVal) || 0;
-    onChange(parsed);
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        type="number"
-        min="0"
-        step="1"
-        value={localVal}
-        onChange={(e) => setLocalVal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        className="w-20 bg-[#1a2332] border border-indigo-500/40 rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-gray-200 outline-none ring-2 ring-indigo-500/20 transition-all"
-      />
-    );
-  }
-
-  if (value === 0) {
-    return (
-      <button
-        type="button"
-        onClick={startEditing}
-        className="w-20 text-center py-1.5 px-2.5 rounded-[var(--radius-md)] text-sm font-medium text-amber-400/80 bg-amber-500/5 border border-amber-500/10 hover:border-amber-500/30 hover:bg-amber-500/10 transition-all cursor-pointer"
-        title="Clique para preencher"
-      >
-        (—)
-      </button>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={startEditing}
-      className="w-20 bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-gray-200 hover:border-indigo-500/30 transition-all cursor-pointer"
-      title="Clique para editar"
-    >
-      {value}
-    </button>
-  );
+interface DraftListClientProps {
+  userName?: string;
 }
 
-export function DraftListClient() {
+export function DraftListClient({ userName = "Usuário" }: DraftListClientProps) {
   const router = useRouter();
   const draftList = useDraftList();
-  const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -161,6 +147,11 @@ export function DraftListClient() {
   const [previewImage, setPreviewImage] = useState<{ url: string; nome: string } | null>(null);
   // Preview de item (modal com nome, foto, preço)
   const [previewItem, setPreviewItem] = useState<DraftItem | null>(null);
+  // Observações (Histórico)
+  const [viewingObservationHistory, setViewingObservationHistory] = useState<DraftItem | null>(null);
+
+  // Offline Sync
+  const { isOnline, queueAction } = useOfflineSync();
 
   // Seleção em lote
   const [draftSelectedIds, setDraftSelectedIds] = useState<Set<string>>(new Set());
@@ -176,12 +167,30 @@ export function DraftListClient() {
   const [titulo, setTitulo] = useState("");
   const [prazo, setPrazo] = useState("");
   const [descricao, setDescricao] = useState("");
+  const [fornecedoresSelecionados, setFornecedoresSelecionados] = useState<Set<string>>(new Set());
+  // Números digitados na busca que não batem com nenhum fornecedor cadastrado —
+  // viram convite avulso assim que a cotação existir (ela ainda não existe aqui).
+  const [numerosPendentes, setNumerosPendentes] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+
+  // Passo pós-publicação: convites já criados, esperando o clique que dispara
+  // cada mensagem de WhatsApp.
+  const [convitesCriados, setConvitesCriados] = useState<FornecedorConvidadoRow[]>([]);
+  const [cotacaoPublicada, setCotacaoPublicada] = useState<{
+    id: string;
+    titulo: string;
+    totalItens: number;
+    dataLimite: string | null;
+  } | null>(null);
 
   // Column config
   const [showColumnConfig, setShowColumnConfig] = useState(false);
   const [columnOrder, setColumnOrder] = useState<string[]>(() =>
     loadColumnOrder(DRAFT_COL_STORAGE_KEY, DRAFT_DEFAULT_ORDER)
+  );
+  const [columnLabels, setColumnLabels] = useState<Record<string, string>>(() =>
+    loadColumnLabels(DRAFT_COL_STORAGE_KEY)
   );
   const [defaultUnit, setDefaultUnit] = useState<string>(() => loadDefaultUnit());
 
@@ -246,14 +255,16 @@ export function DraftListClient() {
             categoria: product.category ?? null,
             precoAtual: product.price_unit_store > 0 ? product.price_unit_store : null,
             estoque: 0,
+            // Zero = campo vazio ("clique para preencher") — ver useDraftList.
             quantidadeSugerida: 0,
             tipoUnidade: defaultUnit as DraftItem["tipoUnidade"],
           });
           showToast(`"${product.name}" adicionado!`, "success");
         }
-        setBarcodeInput("");
+        setSearchQuery("");
       } else {
-        showToast("Produto não encontrado. Deseja cadastrá-lo?", "warning");
+        showToast("Produto não encontrado. Abrindo cadastro de produto...", "warning");
+        router.push(`/empresario/produtos/novo?barcode=${encodeURIComponent(code.trim())}`);
       }
     } catch {
       showToast("Erro ao buscar produto.", "error");
@@ -276,18 +287,50 @@ export function DraftListClient() {
     draftList.updateItem(productId, { [field]: value });
   }
 
-  /* ─── Total estimado ─── */
-  const total = draftList.items.reduce((acc, item) => {
-    if (item.precoAtual) return acc + item.precoAtual * item.quantidadeSugerida;
-    return acc;
-  }, 0);
+  /* ─── Observation handlers ─── */
+  function handleAddNote(texto: string) {
+    if (!viewingObservationHistory) return;
+    const newItem = { ...viewingObservationHistory };
+    const currentNotes = newItem.observacoes || [];
+    const newNote = {
+      id: Date.now().toString(),
+      texto,
+      autor: userName,
+      dataCriacao: new Date().toISOString(),
+      resolvida: false,
+    };
+    
+    const updatedNotes = [...currentNotes, newNote];
+    draftList.updateItem(newItem.productId, { observacoes: updatedNotes });
+    
+    // Atualiza o estado local para o modal refletir imediatamente
+    setViewingObservationHistory({ ...newItem, observacoes: updatedNotes });
+  }
 
-  /* ─── Busca unificada: filtra items da lista por nome ou cód. barras ─── */
-  const looksLikeBarcode = (str: string) =>
-    /^\d{6,}$/.test(str.trim());
+  function handleResolveNote(noteId: string) {
+    if (!viewingObservationHistory) return;
+    const newItem = { ...viewingObservationHistory };
+    const updatedNotes = (newItem.observacoes || []).map((obs) =>
+      obs.id === noteId ? { ...obs, resolvida: true } : obs
+    );
+    
+    draftList.updateItem(newItem.productId, { observacoes: updatedNotes });
+    setViewingObservationHistory({ ...newItem, observacoes: updatedNotes });
+    showToast("Nota resolvida.", "success");
+  }
+
+  function handleDeleteNote(noteId: string) {
+    if (!viewingObservationHistory) return;
+    const newItem = { ...viewingObservationHistory };
+    const updatedNotes = (newItem.observacoes || []).filter((obs) => obs.id !== noteId);
+    
+    draftList.updateItem(newItem.productId, { observacoes: updatedNotes });
+    setViewingObservationHistory({ ...newItem, observacoes: updatedNotes });
+    showToast("Nota apagada.", "info");
+  }
 
   /* ─── Sorting ─── */
-  const { sortCriteria, toggleSort, getSortDirection, getSortIndex, hasSorts, clearSort } = useTableSort();
+  const { sortCriteria, toggleSort, getSortDirection, getSortIndex } = useTableSort();
 
   const getDraftSortField = useCallback(
     (item: DraftItem, column: string): string | number | null | undefined => {
@@ -317,13 +360,57 @@ export function DraftListClient() {
     return applySorting(filtered, sortCriteria, getDraftSortField);
   }, [draftList.items, searchQuery, sortCriteria, getDraftSortField]);
 
+  /* ─── Navegação por teclado entre Estoque e Sugestão ───
+   *
+   * A ordem é sempre Estoque₁ → Sugestão₁ → Estoque₂ → Sugestão₂ → …, **não**
+   * a ordem do DOM: as colunas da tabela são reordenáveis pelo usuário, então
+   * confiar na tab order nativa faria a sequência mudar junto com o layout.
+   * Tab e Enter percorrem a mesma lista.
+   *
+   * O foco é resolvido por `data-foco` no elemento (ver EditableNumberCell) em
+   * vez de um mapa de refs: as chaves carregam o `productId` (uuid), então não
+   * há risco de colisão na página, e não é preciso registrar/desregistrar nada
+   * a cada render.
+   */
+  const chaveFoco = (productId: string, campo: "estoque" | "sugerido") =>
+    `${productId}:${campo}`;
+
+  const ordemFoco = useMemo(
+    () =>
+      filteredItems.flatMap((item) => [
+        chaveFoco(item.productId, "estoque"),
+        chaveFoco(item.productId, "sugerido"),
+      ]),
+    [filteredItems],
+  );
+
+  /** Move o foco para o campo vizinho. Devolve `false` quando não há vizinho
+   * (primeiro/último campo da tabela) — aí o Tab nativo segue seu curso. */
+  const navegarFoco = useCallback(
+    (chaveAtual: string, direcao: "proximo" | "anterior"): boolean => {
+      const indice = ordemFoco.indexOf(chaveAtual);
+      if (indice === -1) return false;
+      const alvo = ordemFoco[indice + (direcao === "proximo" ? 1 : -1)];
+      if (!alvo) return false;
+
+      // rAF: a célula de origem ainda vai desmontar o input neste tick (commit
+      // logo depois desta chamada); focar antes disso perderia o foco.
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(`[data-foco="${alvo}"]`);
+        el?.focus();
+        if (el instanceof HTMLInputElement) el.select();
+      });
+      return true;
+    },
+    [ordemFoco],
+  );
+
   async function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return;
     const q = searchQuery.trim();
     if (!q) return;
     if (looksLikeBarcode(q)) {
       // Tenta adicionar produto pelo barcode
-      setBarcodeInput(q);
       await handleBarcodeSearch(q);
       setSearchQuery("");
     }
@@ -336,10 +423,38 @@ export function DraftListClient() {
     saveColumnOrder(DRAFT_COL_STORAGE_KEY, newOrder);
   }, []);
 
+  const handleSaveColumnLabels = useCallback((newLabels: Record<string, string>) => {
+    setColumnLabels(newLabels);
+    saveColumnLabels(DRAFT_COL_STORAGE_KEY, newLabels);
+  }, []);
+
   const handleDefaultUnitChange = useCallback((unit: string) => {
     setDefaultUnit(unit);
     saveDefaultUnit(unit);
   }, []);
+
+  const toQuotationItemPayload = useCallback(
+    (item: DraftItem): CotacaoItemPayload => {
+      // Sem fallback pra 1: item sem quantidade sai daqui com zero e é barrado
+      // por `hasInvalidQuantity` em handleSend — a checagem é lá, num lugar só.
+      const quantidade = Number.isFinite(item.quantidadeSugerida)
+        ? Math.max(0, Math.trunc(item.quantidadeSugerida))
+        : 0;
+
+      return {
+        nome_produto: item.nome,
+        codigo_barras: item.codigoBarras || undefined,
+        categoria: item.categoria || undefined,
+        estoque_atual: item.estoque > 0 ? item.estoque : undefined,
+        quantidade_sugerida: quantidade,
+        unidade: item.tipoUnidade,
+        tipo_unidade: item.tipoUnidade,
+        quantidade,
+        product_id: item.productId,
+      };
+    },
+    []
+  );
 
   /* ─── Render cell by column ID ─── */
   const renderHeaderCell = (colId: string) => {
@@ -354,7 +469,7 @@ export function DraftListClient() {
               onClick={toggleDraftAll}
               className={`relative h-[18px] w-[18px] rounded-md border-2 transition-all duration-200 cursor-pointer flex items-center justify-center ${
                 allDraftSelected
-                  ? "bg-indigo-500 border-indigo-500"
+                  ? "bg-primary-500 border-primary-500"
                   : "bg-transparent border-white/20 hover:border-white/40"
               }`}
             >
@@ -363,13 +478,14 @@ export function DraftListClient() {
           </TableHead>
         );
       case "foto":
-        return <TableHead key={colId} className="w-[60px]">Foto</TableHead>;
+        return <TableHead key={colId} className="w-[60px]">{columnLabels.foto ?? "Foto"}</TableHead>;
       case "produto":
       case "preco":
       case "estoque":
       case "sugerido":
       case "unidade": {
-        const label = { produto: "Produto", preco: "Preço unit.", estoque: "Estoque", sugerido: "Sugerido", unidade: "Unidade" }[colId];
+        const defaultLabel = { produto: "Produto", preco: "Preço unit.", estoque: "Estoque", sugerido: "Qtd. cotacao", unidade: "Unidade" }[colId];
+        const label = columnLabels[colId] ?? defaultLabel;
         const width = { produto: undefined, preco: "w-[120px]", estoque: "w-[100px]", sugerido: "w-[100px]", unidade: "w-[120px]" }[colId];
         const dir = getSortDirection(colId);
         const idx = getSortIndex(colId);
@@ -386,26 +502,26 @@ export function DraftListClient() {
             <button
               type="button"
               onClick={() => toggleSort(colId)}
-              className="flex items-center gap-1.5 text-inherit hover:text-indigo-400 transition-colors cursor-pointer select-none w-full group/sort"
+              className="flex items-center gap-1.5 text-inherit hover:text-primary-400 transition-colors cursor-pointer select-none w-full group/sort"
             >
               {label}
               {dir && hint && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 whitespace-nowrap">
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-400 whitespace-nowrap">
                   {dir === "asc" ? hint.asc : hint.desc}
                 </span>
               )}
               {!dir && (
-                <ArrowUp className="h-3 w-3 text-gray-600 opacity-0 group-hover/sort:opacity-100 transition-opacity" />
+                <ArrowUp className="h-3 w-3 text-neutral-600 opacity-0 group-hover/sort:opacity-100 transition-opacity" />
               )}
               {dir && sortCriteria.length > 1 && (
-                <span className="text-[9px] text-indigo-400/60 font-bold">{idx}</span>
+                <span className="text-[9px] text-primary-400/60 font-bold">{idx}</span>
               )}
             </button>
           </TableHead>
         );
       }
       case "acoes":
-        return <TableHead key={colId} className="w-[60px]">Ações</TableHead>;
+        return <TableHead key={colId} className="w-[60px]">{columnLabels.acoes ?? "Ações"}</TableHead>;
       default:
         return null;
     }
@@ -423,7 +539,7 @@ export function DraftListClient() {
               onClick={() => toggleDraftOne(item.productId)}
               className={`relative h-[18px] w-[18px] rounded-md border-2 transition-all duration-200 cursor-pointer flex items-center justify-center ${
                 draftSelectedIds.has(item.productId)
-                  ? "bg-indigo-500 border-indigo-500"
+                  ? "bg-primary-500 border-primary-500"
                   : "bg-transparent border-white/20 hover:border-white/40"
               }`}
             >
@@ -440,7 +556,7 @@ export function DraftListClient() {
               <button
                 type="button"
                 onClick={() => setPreviewImage({ url: item.foto!, nome: item.nome })}
-                className="relative h-[44px] w-[44px] rounded-[var(--radius-md)] overflow-hidden bg-white/[0.06] cursor-zoom-in hover:opacity-80 transition-opacity focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                className="relative h-[44px] w-[44px] rounded-[var(--radius-md)] overflow-hidden bg-white/[0.06] cursor-zoom-in hover:opacity-80 transition-opacity focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                 title="Ver imagem ampliada"
               >
                 <Image
@@ -453,12 +569,14 @@ export function DraftListClient() {
               </button>
             ) : (
               <div className="h-[44px] w-[44px] rounded-[var(--radius-md)] bg-white/[0.04] flex items-center justify-center">
-                <Package className="h-5 w-5 text-gray-600" />
+                <Package className="h-5 w-5 text-neutral-600" />
               </div>
             )}
           </TableCell>
         );
       case "produto":
+        const hasUnresolvedNotes = item.observacoes?.some((obs) => !obs.resolvida);
+
         return (
           <TableCell
             key={colId}
@@ -466,25 +584,42 @@ export function DraftListClient() {
             onClick={() => setPreviewItem(item)}
             title="Clique para ver detalhes"
           >
-            <span className="font-semibold text-gray-100 line-clamp-1">
-              {item.nome}
-            </span>
-            {item.codigoBarras && (
-              <span className="text-xs text-gray-500 mt-0.5 block font-mono">
-                {item.codigoBarras}
-              </span>
-            )}
+            <div className="flex items-center justify-between gap-3 pr-2">
+              <div>
+                <span className="font-semibold text-neutral-100 line-clamp-1">
+                  {item.nome}
+                </span>
+                {item.codigoBarras && (
+                  <span className="text-xs text-neutral-500 mt-0.5 block font-mono">
+                    {item.codigoBarras}
+                  </span>
+                )}
+              </div>
+              {hasUnresolvedNotes && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setViewingObservationHistory(item);
+                  }}
+                  className="bg-yellow-500 text-yellow-950 p-1.5 rounded-full animate-pulse hover:animate-none hover:scale-110 transition-transform cursor-pointer shrink-0 shadow-lg shadow-yellow-500/20"
+                  title="Existem notas pendentes neste produto"
+                >
+                  <AlertCircle className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </TableCell>
         );
       case "preco":
         return (
           <TableCell key={colId}>
             {item.precoAtual ? (
-              <span className="text-sm font-bold text-emerald-400">
+              <span className="text-sm font-bold text-success-400">
                 {formatCurrency(item.precoAtual)}
               </span>
             ) : (
-              <span className="text-xs text-gray-600 italic">—</span>
+              <span className="text-xs text-neutral-600 italic">—</span>
             )}
           </TableCell>
         );
@@ -495,6 +630,7 @@ export function DraftListClient() {
               type="number"
               min="0"
               step="1"
+              data-foco={chaveFoco(item.productId, "estoque")}
               value={item.estoque}
               onChange={(e) =>
                 updateField(
@@ -503,15 +639,34 @@ export function DraftListClient() {
                   parseInt(e.target.value) || 0
                 )
               }
-              className="w-20 bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== "Tab") return;
+                // O valor já foi gravado no onChange (input controlado), então
+                // aqui só resta mover o foco.
+                const movido = navegarFoco(
+                  chaveFoco(item.productId, "estoque"),
+                  e.shiftKey ? "anterior" : "proximo",
+                );
+                if (movido) e.preventDefault();
+              }}
+              className="w-20 bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             />
           </TableCell>
         );
       case "sugerido":
         return (
           <TableCell key={colId}>
-            <EditableSugerido
+            {/* min=0 para que a célula possa voltar a ficar vazia (apagar o
+                número não deve reescrever "1" por conta própria). */}
+            <EditableNumberCell
               value={item.quantidadeSugerida}
+              min={0}
+              title="Clique para informar a quantidade a cotar"
+              focusKey={chaveFoco(item.productId, "sugerido")}
+              editOnFocus
+              onNavigate={(direcao) =>
+                navegarFoco(chaveFoco(item.productId, "sugerido"), direcao)
+              }
               onChange={(v) =>
                 updateField(item.productId, "quantidadeSugerida", v)
               }
@@ -531,35 +686,48 @@ export function DraftListClient() {
                     e.target.value as UnitType
                   )
                 }
-                className="w-full h-8 bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] text-white text-sm pl-2.5 pr-7 appearance-none outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+                className="w-full h-8 bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] text-white text-sm pl-2.5 pr-7 appearance-none outline-none focus:border-primary-500 transition-colors cursor-pointer"
               >
                 {UNIT_TYPES.map((u) => (
                   <option
                     key={u}
                     value={u}
-                    className="bg-[#0f1720]"
+                    className="bg-neutral-900"
                   >
                     {u} — {UNIT_TYPE_LABELS[u]}
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-1.5 top-2 h-3.5 w-3.5 text-gray-500 pointer-events-none" />
+              <ChevronDown className="absolute right-1.5 top-2 h-3.5 w-3.5 text-neutral-500 pointer-events-none" />
             </div>
           </TableCell>
         );
       case "acoes":
         return (
           <TableCell key={colId}>
-            <button
-              onClick={() => {
-                draftList.removeItem(item.productId);
-                showToast("Item removido.", "info");
-              }}
-              className="p-1.5 rounded-[var(--radius-md)] text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
-              title="Remover"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setViewingObservationHistory(item)}
+                className={`p-1.5 rounded-[var(--radius-md)] transition-colors cursor-pointer ${
+                  item.observacoes && item.observacoes.length > 0
+                    ? "text-primary-400 hover:text-primary-300 hover:bg-primary-500/10"
+                    : "text-neutral-500 hover:text-neutral-400 hover:bg-white/[0.04]"
+                }`}
+                title="Histórico de Notas"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => {
+                  draftList.removeItem(item.productId);
+                  showToast("Item removido.", "info");
+                }}
+                className="p-1.5 rounded-[var(--radius-md)] text-neutral-500 hover:text-danger-400 hover:bg-danger-500/10 transition-colors cursor-pointer"
+                title="Remover"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </TableCell>
         );
       default:
@@ -567,9 +735,30 @@ export function DraftListClient() {
     }
   };
 
+  /* ─── Convite avulso por WhatsApp (cotação ainda não existe) ─── */
+  function handleAdicionarNumeroPendente(numero: string) {
+    if (!isValidBrPhone(numero)) {
+      showToast("Informe um número válido com DDD (ex.: (11) 91234-5678).", "warning");
+      return;
+    }
+    const digits = numero.replace(/\D/g, "");
+    setNumerosPendentes((prev) =>
+      prev.some((n) => n.replace(/\D/g, "") === digits) ? prev : [...prev, numero]
+    );
+    showToast(`${formatPhone(numero)} será convidado por WhatsApp ao publicar.`, "success");
+  }
+
+  function handleRemoverNumeroPendente(numero: string) {
+    setNumerosPendentes((prev) => prev.filter((n) => n !== numero));
+  }
+
   /* ─── Enviar cotação ─── */
   async function handleSend() {
-    if (!titulo.trim()) {
+    if (sendingRef.current) return;
+
+    const trimmedTitulo = titulo.trim();
+
+    if (!trimmedTitulo) {
       showToast("Título é obrigatório.", "warning");
       return;
     }
@@ -578,37 +767,144 @@ export function DraftListClient() {
       return;
     }
 
+    const itens = draftList.items.map(toQuotationItemPayload);
+    const hasInvalidQuantity = itens.some((item) => item.quantidade <= 0);
+    if (hasInvalidQuantity) {
+      showToast("Defina uma quantidade de cotacao maior que zero para todos os itens.", "warning");
+      return;
+    }
+
+    sendingRef.current = true;
     setSending(true);
+
     try {
-      const formData = new FormData();
-      formData.append("titulo", titulo);
-      formData.append("descricao", descricao);
-      formData.append("data_limite", prazo);
+      if (!isOnline) {
+        // Enfileira para envio offline
+        const queued = await queueAction({
+          type: "CREATE_QUOTATION",
+          payload: {
+            titulo: trimmedTitulo,
+            descricao: descricao.trim(),
+            data_limite: prazo || "",
+            itens,
+            publishAfterCreate: true,
+          }
+        });
 
-      const itens = draftList.items.map((item) => ({
-        nome_produto: item.nome,
-        codigo_barras: item.codigoBarras || undefined,
-        categoria: item.categoria || undefined,
-        estoque_atual: item.estoque || undefined,
-        quantidade_sugerida: item.quantidadeSugerida,
-        tipo_unidade: item.tipoUnidade,
-        quantidade: item.quantidadeSugerida,
-        product_id: item.productId,
-      }));
+        if (!queued) {
+          throw new Error("Não foi possível salvar a cotação na fila offline. Tente novamente.");
+        }
 
-      formData.append("itens", JSON.stringify(itens));
+        if (numerosPendentes.length > 0) {
+          // A fila offline só recria a cotação; convite depende de estar online.
+          showToast(
+            "Os convites por WhatsApp precisam de conexão — convide esses números na tela da cotação depois que ela subir.",
+            "warning",
+          );
+        }
 
-      const result = await criarCotacao(formData);
-      if (result?.error) {
-        showToast(result.error, "error");
-        setSending(false);
-      } else {
+        setTitulo("");
+        setPrazo("");
+        setDescricao("");
+        setNumerosPendentes([]);
         draftList.clearAll();
-        showToast("Cotação criada com sucesso!", "success");
-        // criarCotacao already redirects, but just in case
+        setDraftSelectedIds(new Set());
+        setShowSendModal(false);
+        showToast("Você está offline. A cotação foi salva e será enviada quando reconectar.", "success");
+        router.push("/empresario/cotacoes");
+        return;
       }
-    } catch {
-      showToast("Erro ao criar cotação.", "error");
+
+      // Envio Online Normal — via o backend novo (NestJS/Fastify), não mais
+      // a Server Action criarEPublicarCotacao. O backend faz criar+publicar
+      // sem depender do embed PostgREST cotacoes<->cotacao_itens (a FK que
+      // nunca existiu no banco real — ver CLAUDE.md "Known Issues" e o plano
+      // desta sessão). Itens já vêm com unidade/tipo_unidade preenchidos por
+      // toQuotationItemPayload.
+      const result = await enviarCotacao({
+        titulo: trimmedTitulo,
+        data_limite: prazo || undefined,
+        itens,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+
+      const criados: FornecedorConvidadoRow[] = [];
+
+      // Cotação já foi publicada com sucesso — falha em qualquer convite não
+      // desfaz isso, só avisa separadamente.
+      if (fornecedoresSelecionados.size > 0) {
+        try {
+          criados.push(
+            ...(await convidarPorUsuarios(result.id, Array.from(fornecedoresSelecionados))),
+          );
+        } catch (conviteError) {
+          showToast(
+            conviteError instanceof Error
+              ? `Cotação publicada, mas houve erro ao convidar fornecedores: ${conviteError.message}`
+              : "Cotação publicada, mas houve erro ao convidar fornecedores.",
+            "warning",
+          );
+        }
+      }
+
+      for (const numero of numerosPendentes) {
+        try {
+          criados.push(await convidarFornecedor(result.id, { whatsapp: numero }));
+        } catch (conviteError) {
+          showToast(
+            conviteError instanceof Error
+              ? `Cotação publicada, mas houve erro ao convidar ${formatPhone(numero)}: ${conviteError.message}`
+              : `Cotação publicada, mas houve erro ao convidar ${formatPhone(numero)}.`,
+            "warning",
+          );
+        }
+      }
+
+      const totalItens = draftList.items.length;
+
+      setTitulo("");
+      setPrazo("");
+      setDescricao("");
+      setFornecedoresSelecionados(new Set());
+      setNumerosPendentes([]);
+      draftList.clearAll();
+      setDraftSelectedIds(new Set());
+      setShowSendModal(false);
+      showToast(
+        `Cotação "${trimmedTitulo}" enviada com sucesso! ${totalItens} ${
+          totalItens === 1 ? "item" : "itens"
+        } para os fornecedores.`,
+        "success",
+      );
+
+      if (criados.some((c) => c.whatsapp)) {
+        // Fica na tela pra que o disparo do WhatsApp parta de um clique do
+        // usuário — abrir wa.me automaticamente aqui seria barrado como pop-up.
+        setCotacaoPublicada({
+          id: result.id,
+          titulo: trimmedTitulo,
+          totalItens,
+          dataLimite: prazo || null,
+        });
+        setConvitesCriados(criados);
+        return;
+      }
+
+      // Deep-link direto no detalhe: a cotação recém-enviada abre já pronta
+      // pra acompanhar as respostas, em vez de cair na lista e obrigar a
+      // procurar o card (o antigo `?aberta=<id>` só rolava a lista até ele).
+      router.push(`/empresario/cotacoes/${result.id}`);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Erro ao criar cotação.";
+      showToast(message, "error");
+    } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }
@@ -619,10 +915,10 @@ export function DraftListClient() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-            <ClipboardList className="h-7 w-7 text-indigo-400" />
+            <ClipboardList className="h-7 w-7 text-primary-400" />
             Lista de Cotação
           </h1>
-          <p className="text-sm text-gray-400 mt-1">
+          <p className="text-sm text-neutral-400 mt-1">
             Monte sua lista e envie aos fornecedores para receber propostas.
           </p>
         </div>
@@ -636,7 +932,7 @@ export function DraftListClient() {
             <Settings2 className="h-4 w-4" />
           </Button>
           {draftList.count > 0 && (
-            <span className="text-xs text-gray-500 bg-white/[0.04] px-3 py-1.5 rounded-full border border-white/[0.06]">
+            <span className="text-xs text-neutral-500 bg-white/[0.04] px-3 py-1.5 rounded-full border border-white/[0.06]">
               {draftList.count} {draftList.count === 1 ? "item" : "itens"}
             </span>
           )}
@@ -647,7 +943,7 @@ export function DraftListClient() {
       <Card>
         <CardBody className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
             <input
               id="barcode-search-input"
               type="text"
@@ -655,17 +951,17 @@ export function DraftListClient() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              className="w-full pl-10 pr-4 py-2.5 border border-white/[0.08] rounded-[var(--radius-md)] bg-[#1a2332] text-gray-100 text-sm placeholder:text-gray-600 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 border border-white/[0.08] rounded-[var(--radius-md)] bg-neutral-900 text-neutral-100 text-sm placeholder:text-neutral-600 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             />
             {barcodeLoading && (
-              <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-400 animate-spin" />
+              <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary-400 animate-spin" />
             )}
           </div>
           <Button
             variant="secondary"
             size="md"
-            onClick={() => handleBarcodeSearch(barcodeInput)}
-            disabled={!barcodeInput.trim() || barcodeLoading}
+            onClick={() => handleBarcodeSearch(searchQuery)}
+            disabled={!searchQuery.trim() || barcodeLoading}
           >
             <Search className="h-4 w-4" />
             Buscar
@@ -673,7 +969,7 @@ export function DraftListClient() {
           <Button
             variant="secondary"
             size="md"
-            onClick={() => setShowScanner(true)}
+            onClick={() => setShowScanner((prev) => !prev)}
           >
             <Camera className="h-4 w-4" />
             Escanear
@@ -683,7 +979,7 @@ export function DraftListClient() {
               variant="secondary"
               size="md"
               onClick={() => setShowClearConfirm(true)}
-              className="text-red-400 hover:text-red-300"
+              className="text-danger-400 hover:text-danger-300"
             >
               <Trash2 className="h-4 w-4" />
               Limpar
@@ -704,8 +1000,8 @@ export function DraftListClient() {
 
       {/* Toolbar de seleção em lote */}
       {draftSelectedIds.size > 0 && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-[var(--radius-md)] animate-fade-in">
-          <span className="text-sm text-indigo-300 font-medium">
+        <div className="flex items-center gap-2 px-4 py-2 bg-primary-500/10 border border-primary-500/20 rounded-[var(--radius-md)] animate-fade-in">
+          <span className="text-sm text-primary-300 font-medium">
             {draftSelectedIds.size} item(ns) selecionado(s)
           </span>
           <div className="flex items-center gap-1.5 ml-auto">
@@ -721,7 +1017,7 @@ export function DraftListClient() {
               variant="ghost"
               size="sm"
               onClick={() => setShowBatchRemoveConfirm(true)}
-              className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              className="text-danger-400 hover:text-danger-300 hover:bg-danger-500/10"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Remover selecionados
@@ -754,7 +1050,7 @@ export function DraftListClient() {
                         Adicione produtos a partir da{" "}
                         <button
                           onClick={() => router.push("/empresario/produtos")}
-                          className="text-indigo-400 hover:underline cursor-pointer"
+                          className="text-primary-400 hover:underline cursor-pointer"
                         >
                           gestão de produtos
                         </button>{" "}
@@ -775,21 +1071,7 @@ export function DraftListClient() {
         </Table>
 
         {draftList.count > 0 && (
-          <CardFooter className="flex items-center justify-between">
-            <div className="text-sm text-gray-400">
-              {total > 0 ? (
-                <>
-                  Total estimado:{" "}
-                  <span className="text-emerald-400 font-bold">
-                    {formatCurrency(total)}
-                  </span>
-                </>
-              ) : (
-                <span className="text-gray-600 italic">
-                  Adicione preços para ver o total estimado
-                </span>
-              )}
-            </div>
+          <CardFooter className="flex items-center justify-end">
             <Button
               size="lg"
               onClick={() => setShowSendModal(true)}
@@ -803,14 +1085,14 @@ export function DraftListClient() {
 
       {/* Info box */}
       {draftList.count > 0 && (
-        <div className="flex items-start gap-3 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-[var(--radius-lg)] animate-fade-in">
-          <Send className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
-          <p className="text-xs text-emerald-400/80 leading-relaxed">
-            Ao enviar, os fornecedores receberão apenas:{" "}
-            <strong>Nome, Foto, Código de barras</strong> e campo para
-            preencher <strong>Preço por unidade</strong>. Dados de{" "}
-            <em>estoque</em> e <em>quantidade sugerida</em> não serão
-            compartilhados.
+        <div className="flex items-start gap-3 p-4 bg-success-500/5 border border-success-500/10 rounded-[var(--radius-lg)] animate-fade-in">
+          <Send className="h-4 w-4 text-success-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-success-400/80 leading-relaxed">
+            Ao enviar, os fornecedores receberão:{" "}
+            <strong>Nome, Foto, Código de barras, Quantidade</strong> e a{" "}
+            <strong>Unidade Comercial</strong>, além do campo para preencher{" "}
+            <strong>Preço por unidade</strong>. O <em>estoque</em> não é
+            compartilhado.
           </p>
         </div>
       )}
@@ -818,14 +1100,18 @@ export function DraftListClient() {
       {/* Send Modal */}
       <Modal
         open={showSendModal}
-        onClose={() => setShowSendModal(false)}
+        onClose={() => {
+          if (!sending) setShowSendModal(false);
+        }}
         className="max-w-lg"
       >
-        <ModalHeader onClose={() => setShowSendModal(false)}>
+        <ModalHeader onClose={() => {
+          if (!sending) setShowSendModal(false);
+        }}>
           Enviar Cotação
         </ModalHeader>
         <ModalBody className="space-y-4">
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-neutral-400">
             Defina um título e prazo para publicar a cotação com{" "}
             {draftList.count} {draftList.count === 1 ? "item" : "itens"}.
           </p>
@@ -848,6 +1134,39 @@ export function DraftListClient() {
             value={descricao}
             onChange={(e) => setDescricao(e.target.value)}
           />
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-neutral-400">
+              Convidar fornecedores (opcional)
+            </label>
+            <FornecedorSelector
+              selected={fornecedoresSelecionados}
+              onChange={setFornecedoresSelecionados}
+              onConvidarNumero={handleAdicionarNumeroPendente}
+              numerosJaConvidados={
+                new Set(numerosPendentes.map((n) => n.replace(/\D/g, "")))
+              }
+            />
+            {numerosPendentes.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {numerosPendentes.map((numero) => (
+                  <span
+                    key={numero}
+                    className="inline-flex items-center gap-1.5 text-xs bg-success-500/10 border border-success-500/25 rounded-full pl-3 pr-1.5 py-1 text-success-300"
+                  >
+                    {formatPhone(numero)}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoverNumeroPendente(numero)}
+                      title="Remover convite"
+                      className="p-0.5 rounded-full text-success-300/70 hover:text-success-200 hover:bg-success-500/20 transition-colors cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </ModalBody>
         <ModalFooter>
           <Button
@@ -863,6 +1182,23 @@ export function DraftListClient() {
           </Button>
         </ModalFooter>
       </Modal>
+
+      {/* Convites criados — disparo do WhatsApp depois de publicar */}
+      {cotacaoPublicada && (
+        <ConvitesCriadosModal
+          open
+          convites={convitesCriados}
+          cotacaoTitulo={cotacaoPublicada.titulo}
+          totalItens={cotacaoPublicada.totalItens}
+          dataLimite={cotacaoPublicada.dataLimite}
+          onClose={() => {
+            const { id } = cotacaoPublicada;
+            setCotacaoPublicada(null);
+            setConvitesCriados([]);
+            router.push(`/empresario/cotacoes/${id}`);
+          }}
+        />
+      )}
 
       {/* Clear Confirm */}
       <ConfirmDialog
@@ -900,39 +1236,39 @@ export function DraftListClient() {
           Editar {draftSelectedIds.size} item(ns)
         </ModalHeader>
         <ModalBody className="space-y-4">
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-neutral-400">
             Preencha apenas os campos que deseja alterar. Campos vazios serão ignorados.
           </p>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-400">Qtd. sugerida</label>
+            <label className="text-xs font-medium text-neutral-400">Qtd. sugerida</label>
             <input
               type="number" min="1" step="1"
               placeholder="Ex: 10"
               value={batchQtd}
               onChange={(e) => setBatchQtd(e.target.value)}
-              className="w-full bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              className="w-full bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-400">Estoque atual</label>
+            <label className="text-xs font-medium text-neutral-400">Estoque atual</label>
             <input
               type="number" min="0" step="1"
               placeholder="Ex: 5"
               value={batchEstoque}
               onChange={(e) => setBatchEstoque(e.target.value)}
-              className="w-full bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              className="w-full bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-400">Tipo de unidade</label>
+            <label className="text-xs font-medium text-neutral-400">Tipo de unidade</label>
             <select
               value={batchUnit}
               onChange={(e) => setBatchUnit(e.target.value)}
-              className="w-full bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              className="w-full bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             >
               <option value="">(manter atual)</option>
               {UNIT_TYPES.map((u) => (
-                <option key={u} value={u} className="bg-[#0f1720]">
+                <option key={u} value={u} className="bg-neutral-900">
                   {u} — {UNIT_TYPE_LABELS[u]}
                 </option>
               ))}
@@ -975,24 +1311,35 @@ export function DraftListClient() {
           )}
           <div className="space-y-2">
             {previewItem?.codigoBarras && (
-              <p className="text-xs text-gray-500 font-mono">{previewItem.codigoBarras}</p>
+              <p className="text-xs text-neutral-500 font-mono">{previewItem.codigoBarras}</p>
             )}
             {previewItem?.categoria && (
-              <p className="text-xs text-gray-400">
-                Categoria: <span className="text-gray-200">{previewItem.categoria}</span>
+              <p className="text-xs text-neutral-400">
+                Categoria: <span className="text-neutral-200">{previewItem.categoria}</span>
               </p>
             )}
-            <p className="text-sm font-medium text-gray-300">
+            <p className="text-sm font-medium text-neutral-300">
               Preço por unidade:{" "}
               {previewItem?.precoAtual ? (
-                <span className="text-emerald-400 font-bold">{formatCurrency(previewItem.precoAtual)}</span>
+                <span className="text-success-400 font-bold">{formatCurrency(previewItem.precoAtual)}</span>
               ) : (
-                <span className="text-gray-600 italic">Não informado</span>
+                <span className="text-neutral-600 italic">Não informado</span>
               )}
             </p>
           </div>
         </ModalBody>
       </Modal>
+
+      {/* Modal de Histórico de Observação */}
+      <ObservationHistoryModal
+        open={!!viewingObservationHistory}
+        onClose={() => setViewingObservationHistory(null)}
+        productName={viewingObservationHistory?.nome || ""}
+        observacoes={viewingObservationHistory?.observacoes || []}
+        onAddNote={handleAddNote}
+        onResolveNote={handleResolveNote}
+        onDeleteNote={handleDeleteNote}
+      />
 
       {/* Modal de preview de imagem */}
       {previewImage && (
@@ -1011,6 +1358,8 @@ export function DraftListClient() {
         columns={DRAFT_COLUMNS}
         columnOrder={columnOrder}
         onSave={handleSaveColumnOrder}
+        columnLabels={columnLabels}
+        onLabelsChange={handleSaveColumnLabels}
         defaultUnit={defaultUnit}
         onDefaultUnitChange={handleDefaultUnitChange}
         unitOptions={UNIT_OPTIONS}

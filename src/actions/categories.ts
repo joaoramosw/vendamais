@@ -20,21 +20,25 @@ export async function getCategories(): Promise<{ categories: CategoryWithCount[]
   const { data: categories, error } = await supabase
     .from("categories")
     .select("*")
+    .is("deleted_at", null)
     .order("name", { ascending: true });
 
   if (error) return { categories: [], error: error.message };
 
-  // Count products per category
-  const { data: counts } = await supabase
-    .from("product_categories")
-    .select("category_id");
+  // Count products per category — zero rows downloaded (head: true)
+  const countResults = await Promise.all(
+    (categories ?? []).map((cat) =>
+      supabase
+        .from("product_categories")
+        .select("*", { count: "exact", head: true })
+        .eq("category_id", cat.id)
+    )
+  );
 
   const countMap: Record<string, number> = {};
-  if (counts) {
-    for (const row of counts) {
-      countMap[row.category_id] = (countMap[row.category_id] || 0) + 1;
-    }
-  }
+  (categories ?? []).forEach((cat, i) => {
+    countMap[cat.id] = countResults[i].count ?? 0;
+  });
 
   const enriched: CategoryWithCount[] = (categories ?? []).map((cat) => ({
     ...cat,
@@ -56,11 +60,12 @@ export async function createCategory(formData: FormData) {
 
   const slug = slugify(name);
 
-  // Check duplicate slug
+  // Check duplicate slug (só entre as não-deletadas)
   const { data: existing } = await supabase
     .from("categories")
     .select("id")
     .eq("slug", slug)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (existing) return { error: "Já existe uma categoria com este nome." };
@@ -87,12 +92,13 @@ export async function updateCategory(id: string, formData: FormData) {
 
   const slug = slugify(name);
 
-  // Check duplicate slug (not self)
+  // Check duplicate slug (not self, só entre as não-deletadas)
   const { data: existing } = await supabase
     .from("categories")
     .select("id")
     .eq("slug", slug)
     .neq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (existing) return { error: "Já existe outra categoria com este nome." };
@@ -108,11 +114,14 @@ export async function updateCategory(id: string, formData: FormData) {
   return { category: data };
 }
 
-/* ─── DELETE CATEGORY ─── */
+/* ─── DELETE CATEGORY (soft delete) ─── */
 export async function deleteCategory(id: string) {
   const supabase = await createClient();
 
-  const { error } = await supabase.from("categories").delete().eq("id", id);
+  const { error } = await supabase
+    .from("categories")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id);
 
   if (error) return { error: error.message };
   return { success: true };

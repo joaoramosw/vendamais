@@ -1,6 +1,6 @@
-import { CotacaoDetalhesClient } from "@/components/cotacoes/cotacao-detalhes-client";
+import { CotacaoDetalheView } from "@/components/cotacoes/cotacao-detalhe-view";
 import { createClient } from "@/lib/supabase/server";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
 export default async function CotacaoDetalhesPage({
   params,
@@ -15,23 +15,10 @@ export default async function CotacaoDetalhesPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: cotacao } = await supabase
-    .from("cotacoes")
-    .select(
-      `
-      *,
-      cotacao_itens (*),
-      propostas (
-        *,
-        profiles:fornecedor_id (nome, empresa),
-        proposta_itens (*)
-      )
-    `
-    )
-    .eq("id", id)
-    .single();
-
-  if (!cotacao) notFound();
-
-  return <CotacaoDetalhesClient cotacao={cotacao} />;
+  // Dados buscados no client (CotacaoDetalheView) via o backend novo — a
+  // query embutida anterior (cotacoes -> cotacao_itens/propostas ->
+  // profiles:fornecedor_id) sempre falhava (FK inexistente, fornecedor_id
+  // não existe no schema real), fazendo essa página cair em notFound()
+  // para toda cotação. Ver CLAUDE.md "Known Issues" e o plano da sessão.
+  return <CotacaoDetalheView id={id} />;
 }

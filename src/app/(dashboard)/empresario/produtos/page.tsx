@@ -1,8 +1,8 @@
 import { getProducts } from "@/actions/products";
 import { ProductsTable } from "@/components/produtos/ProductsTable";
 import { ToastContainer } from "@/components/ui/toast";
-import { getUserRole } from "@/lib/roles.server";
-import type { UserRole } from "@/lib/types/database";
+import { normalizePerPage } from "@/lib/pagination";
+import { getCurrentUserRole } from "@/lib/roles.server";
 import { redirect } from "next/navigation";
 
 interface PageProps {
@@ -15,20 +15,22 @@ interface PageProps {
     priceMin?: string;
     priceMax?: string;
     page?: string;
+    perPage?: string;
   }>;
 }
 
 export default async function ProdutosPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const role: UserRole = await getUserRole();
+  const role = await getCurrentUserRole();
 
-  // Block fornecedor from accessing
-  if (role === "fornecedor") {
+  if (role === "supplier") {
     redirect("/fornecedor/dashboard");
   }
 
   const page = params.page ? parseInt(params.page, 10) : 1;
-  const perPage = 20;
+  // A listagem carrega o resto por scroll (ver ProductsTable) — este é só o
+  // tamanho do primeiro lote, escolhido pelo usuário.
+  const perPage = normalizePerPage(params.perPage);
 
   const { products, total, categories } = await getProducts({
     search: params.search,
@@ -43,23 +45,17 @@ export default async function ProdutosPage({ searchParams }: PageProps) {
   });
 
   return (
+    // O cabeçalho (título, botão Configurações e o total) vive dentro da
+    // ProductsTable: o botão liga/desliga funcionalidades da tela e depende do
+    // estado do cliente, então precisa ficar junto do resto da listagem.
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-3xl font-black text-white tracking-tight">
-          Produtos
-        </h1>
-        <p className="text-gray-400 font-medium mt-1">
-          Gerencie seu catálogo de produtos, cotações e códigos de barras.
-        </p>
-      </div>
-
       <ProductsTable
         products={products}
         total={total}
         categories={categories}
         userRole={role}
-        currentPage={page}
         perPage={perPage}
+        perPageFromUrl={!!params.perPage}
         filters={{
           search: params.search,
           category: params.category,

@@ -15,6 +15,14 @@ import { useCallback, useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "vendamais_draft_list";
 
+export interface DraftObservation {
+  id: string;
+  texto: string;
+  autor: string;
+  dataCriacao: string;
+  resolvida: boolean;
+}
+
 export interface DraftItem {
   productId: string;
   nome: string;
@@ -25,6 +33,7 @@ export interface DraftItem {
   estoque: number;
   quantidadeSugerida: number;
   tipoUnidade: "UN" | "CX" | "DZ" | "FD";
+  observacoes?: DraftObservation[];
 }
 
 // ─── Store singleton ───────────────────────────────────────────────────────────
@@ -34,6 +43,27 @@ type Listener = () => void;
 let _items: DraftItem[] = [];
 let _loaded = false;
 const _listeners = new Set<Listener>();
+const VALID_UNITS = new Set<DraftItem["tipoUnidade"]>(["UN", "CX", "DZ", "FD"]);
+
+function _normalizeDraftItem(item: DraftItem): DraftItem {
+  // `0` é o estado "vazio" da quantidade de cotação: o item entra na lista sem
+  // número e a célula pede o preenchimento (EditableNumberCell com min=0). O
+  // envio da cotação já barra item com quantidade zero, então nada escapa sem
+  // quantidade — antes o normalizador forçava `1`, um valor que ninguém
+  // escolheu e que ia pro fornecedor como se fosse decisão do comprador.
+  const quantidadeSugerida = Number.isFinite(item.quantidadeSugerida)
+    ? Math.max(0, Math.trunc(item.quantidadeSugerida))
+    : 0;
+  const estoque = Number.isFinite(item.estoque) ? Math.max(0, Math.trunc(item.estoque)) : 0;
+  const tipoUnidade = VALID_UNITS.has(item.tipoUnidade) ? item.tipoUnidade : "UN";
+
+  return {
+    ...item,
+    quantidadeSugerida,
+    estoque,
+    tipoUnidade,
+  };
+}
 
 function _notify() {
   _listeners.forEach((l) => l());
@@ -41,14 +71,27 @@ function _notify() {
 
 function _save(items: DraftItem[]) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch (error) {
+    // Safari privado / quota excedida no mobile não deve derrubar a UI —
+    // a lista continua funcionando em memória nesta sessão.
+    console.error("Erro ao salvar lista de cotação no localStorage.", error);
+  }
 }
 
 function _load(): DraftItem[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((item): item is DraftItem => {
+        return !!item && typeof item === "object" && typeof (item as DraftItem).productId === "string";
+      })
+      .map(_normalizeDraftItem);
   } catch {
     return [];
   }
@@ -70,8 +113,9 @@ function _init() {
 }
 
 function _setItems(items: DraftItem[]) {
-  _items = items;
-  _save(items);
+  const normalizedItems = items.map(_normalizeDraftItem);
+  _items = normalizedItems;
+  _save(normalizedItems);
   _notify();
 }
 
@@ -88,8 +132,10 @@ function getSnapshot(): DraftItem[] {
   return _items;
 }
 
+const EMPTY_ITEMS: DraftItem[] = [];
+
 function getServerSnapshot(): DraftItem[] {
-  return [];
+  return EMPTY_ITEMS;
 }
 
 // ─── Hook público ─────────────────────────────────────────────────────────────

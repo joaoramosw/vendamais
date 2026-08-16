@@ -17,9 +17,14 @@ export async function createClient() {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             )
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing sessions.
+          } catch (error) {
+            // Em Server Components isso falha porque cookies só podem ser
+            // escritos em Server Actions/Route Handlers — inofensivo se o
+            // middleware está renovando a sessão. Mas logar em vez de
+            // engolir silenciosamente, porque esse mesmo caminho é usado por
+            // signOut() (Server Action), onde uma falha aqui significa que o
+            // cookie de sessão NÃO foi limpo.
+            console.error('[supabase/server] cookieStore.set falhou:', error)
           }
         },
       },

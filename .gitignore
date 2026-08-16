@@ -29,9 +29,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+typescript-errors.txt
+tsc_output*.txt
+url.txt
+key.txt
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -41,3 +46,7 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# backend (NestJS)
+/backend/node_modules
+/backend/dist

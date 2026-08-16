@@ -16,10 +16,19 @@ const buttonVariants = cva(
           "bg-white dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-600 active:bg-neutral-100 dark:active:bg-neutral-500 text-neutral-700 dark:text-neutral-200 shadow-xs",
         ghost:
           "hover:bg-neutral-100 dark:hover:bg-neutral-700 active:bg-neutral-200 dark:active:bg-neutral-600 text-neutral-600 dark:text-neutral-300",
+        /**
+         * Botão contornado SEM cor própria — fundo, texto e borda vêm inteiros
+         * de quem usa. Existe justamente para botões temáticos (ações
+         * coloridas): com `secondary`, cada cor precisava vencer 8 classes
+         * padrão (`dark:text-neutral-200`, `dark:border-neutral-600`,
+         * `active:bg-neutral-*`…) via tailwind-merge, e qualquer propriedade
+         * esquecida vazava cinza. Aqui não há o que sobrescrever.
+         */
+        outline: "bg-transparent border shadow-xs",
         danger:
-          "bg-danger hover:bg-red-600 active:bg-red-700 text-white shadow-sm",
+          "bg-danger hover:bg-danger-600 active:bg-danger-700 text-white shadow-sm",
         success:
-          "bg-success hover:bg-emerald-600 active:bg-emerald-700 text-white shadow-sm",
+          "bg-success hover:bg-success-600 active:bg-success-700 text-white shadow-sm",
         link:
           "text-primary-500 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 underline-offset-4 hover:underline p-0 h-auto",
       },
@@ -41,10 +50,11 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   loading?: boolean;
+  loadingText?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, loading, children, disabled, ...props }, ref) => {
+  ({ className, variant, size, loading, loadingText, children, disabled, ...props }, ref) => {
     return (
       <button
         ref={ref}
@@ -52,10 +62,14 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || loading}
         {...props}
       >
-        {loading && (
-          <Loader2 className="h-4 w-4 animate-spin" />
+        {loading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {loadingText || children}
+          </>
+        ) : (
+          children
         )}
-        {children}
       </button>
     );
   }

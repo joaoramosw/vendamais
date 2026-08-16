@@ -1,77 +1,48 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
-import type { GlobalRole, MembershipRole, UserRole } from '@/lib/types/database'
-import { redirect } from 'next/navigation'
+/**
+ * roles.server.ts — Server-side role resolvers.
+ *
+ * Uses the new `users` + `roles` tables instead of `profiles` / `memberships`.
+ */
 
-// Papel legado baseado no campo 'role' de profiles (mantido para compatibilidade)
-export async function getUserRole(): Promise<UserRole> {
-  const supabase = await createClient()
+import { getCurrentUser, type CurrentUser } from '@/lib/auth/current-user'
+import type { RoleKey } from '@/lib/types/database'
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
-
-  return (profile?.role as UserRole) ?? 'fornecedor'
+/**
+ * Returns the current user's role key (admin | supplier).
+ */
+export async function getCurrentUserRole(): Promise<RoleKey> {
+  const user = await getCurrentUser()
+  return user.role
 }
 
-// Papel global do usuário na plataforma (super_admin | user)
-export async function getGlobalRole(): Promise<GlobalRole> {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('global_role')
-    .eq('id', user.id)
-    .single()
-
-  return (profile?.global_role as GlobalRole) ?? 'user'
+/**
+ * Returns the full current user object.
+ * Alias for getCurrentUser() — kept for backward compatibility.
+ */
+export async function getUserProfile(): Promise<CurrentUser> {
+  return getCurrentUser()
 }
 
-// Papel do usuário dentro de uma organização específica (ou da ativa se não informado)
-export async function getUserMembershipRole(
-  organizationId?: string
-): Promise<MembershipRole | null> {
-  const supabase = await createClient()
+// ── Backward compatibility aliases (deprecated) ─────────────────────────────
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+/** @deprecated Use getCurrentUserRole() instead */
+export async function getUserTipo(): Promise<RoleKey> {
+  return getCurrentUserRole()
+}
 
-  // Se não informado, usar a organização ativa
-  let orgId = organizationId
-  if (!orgId) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('active_organization_id')
-      .eq('id', user.id)
-      .single()
+/** @deprecated Use getCurrentUserRole() instead */
+export async function getUserRole(): Promise<RoleKey> {
+  return getCurrentUserRole()
+}
 
-    orgId = profile?.active_organization_id ?? undefined
-  }
+/** @deprecated Use getCurrentUserRole() instead */
+export async function getGlobalRole(): Promise<RoleKey> {
+  return getCurrentUserRole()
+}
 
-  if (!orgId) return null
-
-  const { data: membership } = await supabase
-    .from('memberships')
-    .select('role')
-    .eq('user_id', user.id)
-    .eq('organization_id', orgId)
-    .eq('is_active', true)
-    .single()
-
-  return membership?.role as MembershipRole ?? null
+/** @deprecated Use getCurrentUserRole() instead. The membership system is removed. */
+export async function getUserMembershipRole(): Promise<RoleKey> {
+  return getCurrentUserRole()
 }

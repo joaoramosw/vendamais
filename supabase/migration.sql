@@ -75,7 +75,7 @@ CREATE INDEX idx_cotacao_itens_cotacao ON cotacao_itens(cotacao_id);
 -- ===========================================
 -- 4. PROPOSTAS
 -- ===========================================
-CREATE TYPE proposta_status AS ENUM ('enviada', 'aceita', 'recusada');
+CREATE TYPE proposta_status AS ENUM ('enviada', 'recebida', 'aceita', 'recusada');
 
 CREATE TABLE propostas (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

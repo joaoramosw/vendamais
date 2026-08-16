@@ -72,15 +72,15 @@ export function StockModal({
           : "Informar estoque"}
       </ModalHeader>
       <ModalBody className="space-y-4">
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-neutral-400">
           Informe o estoque atual antes de adicionar à lista de cotação.
         </p>
 
         {/* Ação em lote: aplicar para todos */}
         {isBatch && (
-          <div className="flex items-end gap-2 p-3 bg-indigo-500/5 border border-indigo-500/10 rounded-[var(--radius-md)]">
+          <div className="flex items-end gap-2 p-3 bg-primary-500/5 border border-primary-500/10 rounded-[var(--radius-md)]">
             <div className="flex-1 space-y-1.5">
-              <label className="text-xs font-medium text-indigo-300">
+              <label className="text-xs font-medium text-primary-300">
                 Aplicar estoque para todos
               </label>
               <input
@@ -90,7 +90,7 @@ export function StockModal({
                 placeholder="Ex: 10"
                 value={applyAllValue}
                 onChange={(e) => setApplyAllValue(e.target.value)}
-                className="w-full bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-full bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-3 py-2 text-sm text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
             <Button
@@ -124,17 +124,17 @@ export function StockModal({
                 </div>
               ) : (
                 <div className="h-9 w-9 rounded-md bg-white/[0.04] flex items-center justify-center shrink-0">
-                  <Package className="h-4 w-4 text-gray-600" />
+                  <Package className="h-4 w-4 text-neutral-600" />
                 </div>
               )}
 
               {/* Nome */}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-200 truncate">
+                <p className="text-sm font-medium text-neutral-200 truncate">
                   {p.name}
                 </p>
                 {p.barcode && (
-                  <p className="text-[11px] text-gray-500 font-mono">
+                  <p className="text-[11px] text-neutral-500 font-mono">
                     {p.barcode}
                   </p>
                 )}
@@ -152,7 +152,7 @@ export function StockModal({
                     [p.id]: e.target.value,
                   }))
                 }
-                className="w-20 bg-[#1a2332] border border-white/[0.08] rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-gray-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+                className="w-20 bg-neutral-900 border border-white/[0.08] rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-center text-neutral-200 outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
               />
             </div>
           ))}

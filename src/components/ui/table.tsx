@@ -24,7 +24,7 @@ const TableHeader = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <thead
     ref={ref}
-    className={cn("bg-white/[0.03] border-b border-white/[0.06]", className)}
+    className={cn("bg-neutral-50 dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700", className)}
     {...props}
   />
 ));
@@ -35,7 +35,7 @@ const TableBody = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <tbody ref={ref} className={cn("divide-y divide-white/[0.04]", className)} {...props} />
+  <tbody ref={ref} className={cn("divide-y divide-neutral-200 dark:divide-neutral-800", className)} {...props} />
 ));
 TableBody.displayName = "TableBody";
 
@@ -47,8 +47,8 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "hover:bg-white/[0.03] transition-colors",
-      selected && "bg-indigo-500/[0.06]",
+      "hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors",
+      selected && "bg-primary-500/[0.06]",
       className
     )}
     {...props}
@@ -68,8 +68,8 @@ const TableHead = React.forwardRef<HTMLTableCellElement, TableHeadProps>(
     <th
       ref={ref}
       className={cn(
-        "px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider",
-        sortable && "cursor-pointer select-none hover:text-gray-200",
+        "px-4 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider",
+        sortable && "cursor-pointer select-none hover:text-neutral-900 dark:hover:text-neutral-200",
         className
       )}
       onClick={sortable ? onSort : undefined}
@@ -78,7 +78,7 @@ const TableHead = React.forwardRef<HTMLTableCellElement, TableHeadProps>(
       <span className="inline-flex items-center gap-1">
         {children}
         {sortable && (
-          <span className="text-gray-600">
+          <span className="text-neutral-600">
             {sortDirection === "asc" ? (
               <ArrowUp className="h-3.5 w-3.5 text-primary-500" />
             ) : sortDirection === "desc" ? (
@@ -101,7 +101,7 @@ const TableCell = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn("px-4 py-3 text-gray-300", className)}
+    className={cn("px-4 py-3 text-neutral-600 dark:text-neutral-300", className)}
     {...props}
   />
 ));

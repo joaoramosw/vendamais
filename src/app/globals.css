@@ -5,10 +5,11 @@
    VENDA MAIS — Design Tokens (Tailwind v4)
    ============================================ */
 
-@theme inline {
-  /* — Fonts — */
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+@theme {
+  /* — Fonts — conectadas às vars reais do next/font (src/app/layout.tsx),
+     não mais strings soltas desligadas do carregamento real da fonte. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 
   /* — Primary (Indigo) — */
   --color-primary-50: #EEF2FF;
@@ -22,27 +23,123 @@
   --color-primary-800: #3730A3;
   --color-primary-900: #312E81;
 
-  /* — Neutral (Slate) — */
-  --color-neutral-50: #F8FAFC;
-  --color-neutral-100: #F1F5F9;
-  --color-neutral-200: #E2E8F0;
-  --color-neutral-300: #CBD5E1;
-  --color-neutral-400: #94A3B8;
-  --color-neutral-500: #64748B;
-  --color-neutral-600: #475569;
-  --color-neutral-700: #334155;
-  --color-neutral-800: #1E293B;
-  --color-neutral-900: #0F172A;
+  /* — Secondary (Teal) — token novo pedido pelo sistema de tema (cor de
+     marca secundária, distinta de primary/info). */
+  --color-secondary-50: #F0FDFA;
+  --color-secondary-100: #CCFBF1;
+  --color-secondary-200: #99F6E4;
+  --color-secondary-300: #5EEAD4;
+  --color-secondary-400: #2DD4BF;
+  --color-secondary-500: #14B8A6;
+  --color-secondary-600: #0D9488;
+  --color-secondary-700: #0F766E;
+  --color-secondary-800: #115E59;
+  --color-secondary-900: #134E4A;
+  --color-secondary-950: #042F2E;
 
-  /* — Semantic — */
-  --color-success: #10B981;
-  --color-success-light: #D1FAE5;
-  --color-warning: #F59E0B;
-  --color-warning-light: #FEF3C7;
-  --color-danger: #EF4444;
-  --color-danger-light: #FEE2E2;
-  --color-info: #3B82F6;
-  --color-info-light: #DBEAFE;
+  /* — Neutral (Gray) — unificado com a paleta "gray" do Tailwind: os hex
+     hardcoded mais usados no app (#1F2937, #111827) já eram gray-800/900
+     digitados na mão, então esta escala os torna tokens de verdade. */
+  --color-neutral-50: #F9FAFB;
+  --color-neutral-100: #F3F4F6;
+  --color-neutral-200: #E5E7EB;
+  --color-neutral-300: #D1D5DB;
+  --color-neutral-400: #9CA3AF;
+  --color-neutral-500: #6B7280;
+  --color-neutral-600: #4B5563;
+  --color-neutral-700: #374151;
+  --color-neutral-800: #1F2937;
+  --color-neutral-900: #111827;
+  --color-neutral-950: #030712;
+
+  /* — Semantic — escalas completas (50–950), espelhando 1:1 as paletas
+     emerald/amber/red/blue do Tailwind, para cobrir os tons intermediários
+     hoje hardcoded (ex.: text-emerald-400, bg-red-950) sem perder o valor
+     base (success/warning/danger/info) já usado em botões/badges. */
+  --color-success-50: #ECFDF5;
+  --color-success-100: #D1FAE5;
+  --color-success-200: #A7F3D0;
+  --color-success-300: #6EE7B7;
+  --color-success-400: #34D399;
+  --color-success-500: #10B981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+  --color-success-800: #065F46;
+  --color-success-900: #064E3B;
+  --color-success-950: #022C22;
+  --color-success: var(--color-success-500);
+  --color-success-light: var(--color-success-100);
+
+  --color-warning-50: #FFFBEB;
+  --color-warning-100: #FEF3C7;
+  --color-warning-200: #FDE68A;
+  --color-warning-300: #FCD34D;
+  --color-warning-400: #FBBF24;
+  --color-warning-500: #F59E0B;
+  --color-warning-600: #D97706;
+  --color-warning-700: #B45309;
+  --color-warning-800: #92400E;
+  --color-warning-900: #78350F;
+  --color-warning-950: #451A03;
+  --color-warning: var(--color-warning-500);
+  --color-warning-light: var(--color-warning-100);
+
+  --color-danger-50: #FEF2F2;
+  --color-danger-100: #FEE2E2;
+  --color-danger-200: #FECACA;
+  --color-danger-300: #FCA5A5;
+  --color-danger-400: #F87171;
+  --color-danger-500: #EF4444;
+  --color-danger-600: #DC2626;
+  --color-danger-700: #B91C1C;
+  --color-danger-800: #991B1B;
+  --color-danger-900: #7F1D1D;
+  --color-danger-950: #450A0A;
+  --color-danger: var(--color-danger-500);
+  --color-danger-light: var(--color-danger-100);
+
+  --color-info-50: #EFF6FF;
+  --color-info-100: #DBEAFE;
+  --color-info-200: #BFDBFE;
+  --color-info-300: #93C5FD;
+  --color-info-400: #60A5FA;
+  --color-info-500: #3B82F6;
+  --color-info-600: #2563EB;
+  --color-info-700: #1D4ED8;
+  --color-info-800: #1E40AF;
+  --color-info-900: #1E3A8A;
+  --color-info-950: #172554;
+  --color-info: var(--color-info-500);
+  --color-info-light: var(--color-info-100);
+
+  /* — Ranking (1º / 2º / 3º colocado) —
+     Ouro, prata e bronze como tokens de verdade: a colocação é informação
+     de domínio (aparece na tabela de comparação, nos cards do mobile e na
+     exportação), não decoração de um componente.
+
+     Dois valores por posição porque o par claro/escuro não pode ser o mesmo
+     hex: o tom escuro (`-*`) passa AA sobre branco (4,7–5,8:1) e o tom claro
+     (`-*-dark`) passa AA sobre neutral-900 (8–11:1). O uso é sempre
+     `text-rank-gold dark:text-rank-gold-dark`, mesmo idioma de
+     `text-success-600 dark:text-success-400` já usado no app. */
+  --color-rank-gold: #8A6D06;
+  --color-rank-gold-dark: #F5C542;
+  --color-rank-silver: #6B7280;
+  --color-rank-silver-dark: #C7CDD6;
+  --color-rank-bronze: #8C5A2B;
+  --color-rank-bronze-dark: #E0A06A;
+
+  /* — Tendência de margem (valor ofertado × valor ideal de compra) —
+     Aliases semânticos sobre as escalas existentes: "acima do ideal" é ruim
+     (caro) e "abaixo" é bom (barato), o inverso da leitura ingênua de
+     seta pra cima = positivo. Nomear o estado, e não a cor, evita que o
+     componente decida essa polaridade por conta própria. */
+  --color-trend-up: var(--color-danger-600);
+  --color-trend-up-dark: var(--color-danger-400);
+  --color-trend-down: var(--color-success-600);
+  --color-trend-down-dark: var(--color-success-400);
+  --color-trend-equal: var(--color-neutral-500);
+  --color-trend-equal-dark: var(--color-neutral-400);
 
   /* — Shadows — */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -56,6 +153,9 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  --radius-2xl: 32px;
+  --radius-3xl: 40px;
+  --radius-4xl: 48px;
   --radius-full: 9999px;
 }
 
@@ -71,6 +171,8 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* --font-scale vem do tema ativo (tokensToCssVars); 1 = tamanho atual */
+  font-size: calc(1rem * var(--font-scale, 1));
 }
 
 body {
@@ -304,5 +406,95 @@ html.dark body {
 
 .animate-badge-slide-down {
   animation: badge-slide-down 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================
+   Item da cotação com observação de fornecedor
+   ============================================
+   Pulso dourado no ícone do produto quando algum fornecedor escreveu uma
+   observação para aquele item — é o único aviso de que existe texto livre
+   escondido atrás do acesso rápido.
+
+   Anima só `opacity`/`transform` (compostas pela GPU, sem layout/paint). A
+   **cor não vem daqui**: quem pinta é o par `text-rank-gold
+   dark:text-rank-gold-dark` no componente, o mesmo dourado das colocações
+   (ver gotcha #30 do CLAUDE.md) — assim existe uma fonte só para o tom. */
+
+@keyframes pulso-observacao {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(1.15); }
+}
+
+.icone-observacao {
+  animation: pulso-observacao 1.8s ease-in-out infinite;
+}
+
+/* Quem pediu menos movimento continua vendo o destaque (dourado e maior) —
+   só sem piscar. */
+@media (prefers-reduced-motion: reduce) {
+  .icone-observacao {
+    animation: none;
+  }
+}
+
+/* ============================================
+   Mobile Responsive Enhancements
+   ============================================ */
+
+@media (max-width: 640px) {
+  html {
+    font-size: 16px;
+  }
+
+  /* Minimum touch target for interactive elements */
+  button, a, input, select, textarea {
+    min-height: 44px;
+  }
+
+  /* Ensure inputs don't zoom on iOS */
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  input[type="password"],
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Safe area insets for notched devices */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ============================================
+   Impressão — tela de resultado da cotação
+   (chrome do dashboard já escondido via print:hidden
+   em src/app/(dashboard)/layout.tsx; aqui só o que é
+   específico de conteúdo impresso: cores, quebras de
+   página e páginas longas com muitos itens)
+   ============================================ */
+
+@media print {
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+
+  /* Cada card de item/resultado não deve ser cortado ao meio entre páginas. */
+  .print-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
 }
 

@@ -1,4 +1,6 @@
-import { ThemeProvider } from "@/components/theme-provider";
+import { SonnerToaster } from "@/components/ui/sonner-toaster";
+import { themeToHtmlProps } from "@/components/theme/theme-html-props";
+import { getTheme } from "@/lib/theme/get-theme";
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
@@ -22,29 +24,19 @@ export const metadata: Metadata = {
   keywords: ["cotação", "fornecedores", "compras", "B2B", "SaaS"],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const theme = await getTheme();
+  const { className, style } = themeToHtmlProps(theme);
+
   return (
-    <html lang="pt-BR" suppressHydrationWarning>
-      <head>
-        {/* Prevent flash of wrong theme */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              try {
-                const t = localStorage.getItem('theme');
-                const d = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                if (t === 'dark' || (!t && d)) document.documentElement.classList.add('dark');
-              } catch(e) {}
-            `,
-          }}
-        />
-      </head>
+    <html lang="pt-BR" className={className} style={style}>
       <body className={`${inter.variable} ${jetbrains.variable} antialiased bg-neutral-50 dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 transition-colors`}>
-        <ThemeProvider>{children}</ThemeProvider>
+        {children}
+        <SonnerToaster />
       </body>
     </html>
   );
