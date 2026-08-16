@@ -7,6 +7,7 @@ import { resultadoPorItem } from "../propostas/propostas.service";
 import type { ItemResultado, RankingEntry } from "../propostas/ranking-por-item.util";
 import type { ExportCotacaoQuery } from "./dto";
 import { slugify } from "./slug.util";
+import { nomeAbaExcel } from "./excel-sheet-name";
 
 /**
  * Exportação da cotação (xlsx/pdf) — conversão 1:1 do
@@ -131,7 +132,9 @@ async function gerarXlsx(
   incluirInternos: boolean,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(cotacao.titulo.slice(0, 31) || "Cotação");
+  // O exceljs lança se o nome tiver caractere proibido pelo Excel — ver
+  // excel-sheet-name.ts (título com colchete/':' derrubava o export com 500).
+  const sheet = workbook.addWorksheet(nomeAbaExcel(cotacao.titulo));
   const cols = colunas(incluirInternos);
 
   sheet.columns = cols.map((c) => ({ header: c.header, key: c.key, width: c.width }));
