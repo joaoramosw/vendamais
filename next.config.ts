@@ -8,6 +8,44 @@ const nextConfig: NextConfig = {
    * os pacotes inteiros junto da função.
    */
   serverExternalPackages: ["pdfkit", "exceljs"],
+
+  /**
+   * Cabeçalhos de segurança.
+   *
+   * Deliberadamente enxutos: cobrem o que dá ganho real sem risco de quebrar
+   * a aplicação. Uma CSP completa (`script-src`) exigiria nonce por request —
+   * sem isso, o Next precisa de `unsafe-inline` para hidratar e a diretiva
+   * viraria enfeite. O que fica:
+   *
+   * - `frame-ancestors 'none'` + X-Frame-Options: anti-clickjacking. É a
+   *   proteção mais valiosa aqui, porque o link público /proposta/[id] circula
+   *   por WhatsApp e é alvo natural de moldura maliciosa.
+   * - nosniff: impede o navegador de reinterpretar o tipo do xlsx/pdf.
+   * - Referrer-Policy: o token do convite vive na URL; sem isso, ele
+   *   vazaria no header Referer de qualquer link externo aberto da página.
+   * - Permissions-Policy: `camera=(self)` continua liberando o scanner de
+   *   código de barras (@zxing em /empresario/produtos); o resto é negado.
+   *
+   * HSTS não entra aqui: a Vercel já o envia nos domínios que ela serve.
+   */
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(self), microphone=(), geolocation=(), payment=(), usb=()",
+          },
+        ],
+      },
+    ];
+  },
+
   images: {
     /**
      * remotePatterns é o padrão atual recomendado (Next.js 13+).

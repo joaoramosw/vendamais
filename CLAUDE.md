@@ -26,15 +26,27 @@ node scripts/definir-telefone-usuario.mjs --email <e-mail> --telefone "(71) 9999
 
 **Ainda vale rodar `supabase/migrations/005_allow_fd_unit_type.sql` no SQL Editor do Supabase** para voltar a gravar `tipo_unidade` corretamente (hoje um item "Fardo" fica `unidade='FD'` / `tipo_unidade='UN'` no banco, e só a API devolve `FD` nos dois).
 
-## 🔴 ALERTA — cotações/propostas rodam num backend NestJS separado, que precisa ser iniciado à parte
+## ✅ PROJETO ÚNICO — o backend NestJS separado **não existe mais** (16/08/2026)
 
-**Confirmado em 20/07/2026.** O domínio de cotações/propostas foi migrado para um backend próprio em NestJS/Fastify na pasta `backend/` (porta 3001 por padrão, ver `backend/.env` e `NEXT_PUBLIC_API_URL` em `.env.local`). O frontend fala com ele via `src/lib/api/backend-client.ts` (`apiFetch`/`apiFetchPublic`) e `src/lib/api/cotacoes-api.ts` — é esse o caminho real hoje para listar/criar/publicar cotação (`CotacoesListClient`, `DraftListClient`, `cotacoes/nova`), não mais os Server Actions de `src/actions/cotacoes.ts` (que sobrevivem só para `buscarProdutoPorBarcode`/`buscarProdutosPorNome`, e para o componente órfão `cotacao-detalhes-client.tsx`, que não tem mais nenhuma página que o renderize).
+O domínio de cotações/propostas rodava num serviço NestJS/Fastify próprio na pasta `backend/` (porta 3001). Ele foi **incorporado ao Next.js** e removido: hoje é uma aplicação só, um deploy só.
 
-**`npm run dev` da raiz NÃO sobe esse backend** — só o Next.js. Sem o backend rodando, qualquer tela de cotação mostra "Failed to fetch" (listar, criar, publicar, enviar). Para desenvolver localmente:
-- `npm run dev:all` — sobe Next.js + backend juntos (usa `concurrently`, adicionado como devDependency); ou
-- `npm run dev` + `npm run dev:backend` (ou `cd backend && npm run start:dev`) em terminais separados.
+```
+Browser → Next.js (Vercel) ─┬─ páginas/UI
+                            └─ /api/**  →  src/server/**  →  Supabase
+```
 
-**Nota sobre o restante deste arquivo**: o schema descrito no alerta abaixo (`profiles`/`memberships`/`admin_id`) reflete uma versão anterior do modelo de dados. O código hoje usa tabelas `users`/`roles` (ver `src/actions/admin-users.ts`) para usuários/permissões — mais simples que o modelo `profiles`+`memberships` descrito abaixo. O alerta original foi mantido como está por não ter sido re-verificado contra o banco nesta sessão; trate qualquer nome de coluna abaixo com a mesma cautela (confirme direto no banco antes de confiar).
+- **`npm run dev` sobe o sistema inteiro.** Não existe mais `dev:backend` nem `dev:all`, e nada roda na porta 3001.
+- **Rotas:** `src/app/api/**` — 23 arquivos, mesmos paths de antes (`/api/cotacoes`, `/api/propostas`, `/api/convite/[identificador]`, `/api/fornecedor/**`, `/api/health`). Como os paths não mudaram, **nenhum call site do frontend precisou mudar**: `src/lib/api/backend-client.ts` continua chamando `/api` — agora na mesma origem, sem CORS e sem proxy.
+- **Domínio:** `src/server/**` (`cotacoes/`, `propostas/`, `fornecedor/`). Os services do Nest viraram módulos de funções; `this.supabase.client` virou `adminClient()` (`src/server/supabase.ts`).
+- **Camadas, nesta ordem:** `route.ts` (auth + validação) → `src/server/<domínio>` (regra de negócio) → Supabase. Não coloque regra de negócio no route handler.
+- **Autorização:** `src/server/auth.ts` — `requireEmpresario` (Bearer + `users`→`roles.key === 'admin'`) e `requireAutenticado` (só sessão). A service role bypassa RLS, então **cada service checa o dono** (`admin_id`, token do convite, casamento por e-mail/telefone). RLS é defesa em profundidade, não a fronteira.
+- **Erros:** `src/server/http.ts` mantém as exceptions do Nest (`BadRequestException`, …) e o contrato `{ statusCode, message, error }`. **`message` é obrigatório** — `backend-client.ts#extractMessage` lê exatamente esse campo; mudar o formato transforma toda mensagem de erro da UI em "Erro ao comunicar com o servidor.".
+- **Validação:** Zod com `z.strictObject` (equivale ao `forbidNonWhitelisted: true` do ValidationPipe). Campo desconhecido continua sendo rejeitado com 400.
+- **Probes de migration** (`cotacao_grupos`, `propostas.observacao`, `proposta_itens.product_id`) viraram estado de módulo com TTL de 60s. São otimização por instância — **nunca** requisito de correção: instância nova só paga um probe a mais.
+- **Exportação** (`/api/cotacoes/[id]/export`) roda com `runtime = "nodejs"` e depende de `serverExternalPackages: ["pdfkit", "exceljs"]` no `next.config.ts`. Sem isso o bundling quebra o pdfkit (ele lê as fontes `.afm` do próprio node_modules em runtime).
+- **Verificação:** `node scripts/smoke-api.mjs [--base=URL]` roda o fluxo crítico ponta a ponta (33 checagens). A paridade contra o Nest foi validada rota a rota antes da remoção (23/23: status, corpo, IDOR, validação e ciclo completo).
+
+**Nota sobre o restante deste arquivo**: o schema descrito no alerta abaixo (`profiles`/`memberships`/`admin_id`) reflete uma versão anterior do modelo de dados. O código hoje usa tabelas `users`/`roles` para usuários/permissões. Trate qualquer nome de coluna abaixo com cautela (confirme direto no banco antes de confiar). Onde os alertas antigos citam caminhos `backend/src/...`, o arquivo equivalente hoje está em `src/server/...`.
 
 ## 🔴 ALERTA (histórico) — o código local diverge do schema real do banco (Supabase)
 
@@ -136,14 +148,18 @@ Ações não relacionadas mas parecidas pelo nome: `product-quotes.ts` é uma fe
 ## Comandos úteis
 
 ```
-npm run dev        # só o Next.js — cotações/propostas falham com "Failed to fetch" sem o backend (ver alerta no topo)
-npm run dev:backend # só o backend NestJS (pasta backend/), porta 3001
-npm run dev:all     # Next.js + backend juntos (concurrently) — use este pro fluxo completo
-npm run lint        # eslint (flat config, ignora .next/, supabase/, sql/, src/scripts/, darken.js)
-npm run build       # build de produção
+npm run dev        # sobe o sistema inteiro (UI + API). Não existe segundo servidor.
+npm run build      # build de produção
+npm start          # serve o build
+npm test           # testes unitários (node:test via tsx) — src/server/**/*.test.ts + src/lib/margem.test.ts
+npm run typecheck  # tsc --noEmit
+npm run lint       # eslint (flat config, ignora .next/, supabase/, sql/, src/scripts/, darken.js)
+npm run dev:tunnel # ngrok apontando pro localhost:3000 (opcional, manual — fora do build)
+
+node scripts/smoke-api.mjs [--base=URL]   # fluxo crítico ponta a ponta (33 checagens)
 ```
 
-Não há `npm test` configurado (ver gotcha #9). Variáveis de ambiente esperadas em `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (nunca expor a service role key ao client).
+`npm test` roda os testes unitários (ver a seção de comandos). Variáveis de ambiente esperadas em `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (nunca expor a service role key ao client).
 
 ## Gestão de usuários — criação imediata com senha provisória
 
@@ -271,6 +287,16 @@ Confirmados por leitura direta do código (não são só achados de heurística)
 
 51. 🆕 **`Logo` ganhou a variante `icon` (15/08/2026).** É o app icon (mesmo desenho do favicon, arte de 500×500 com traço mais definido que o símbolo de 256px), **sem texto nunca**, usado só na **sidebar recolhida** (72px). Antes ali ficava `variant="mark"` com `showText` no padrão `true`: o nome era cortado pelo `overflow-hidden` e ainda empurrava o símbolo pra fora do centro. As variantes são separadas de propósito — trocar a arte de uma não mexe na outra, e `mark`/`full` continuam intocadas. O arquivo é `public/logos/vendamais-icone.png`, **cópia** de `favicon vendamais.png` com nome sem espaço (espaço em `src` de `next/image` vira `%20` e é fonte fácil de 404 silencioso); o original segue no lugar.
 
+52. ✅ **Migração para projeto único Next.js + Vercel (16/08/2026).** Ver o bloco "PROJETO ÚNICO" no topo deste arquivo para a arquitetura resultante. Além da migração em si, esta rodada:
+    - **Removeu `/api/fix-profiles` e `/api/reload-schema`**, que usavam a service role key **sem nenhuma autenticação** — em produção, qualquer pessoa na internet as executaria. `/api/debug-profile` também saiu (ferramenta de um incidente já resolvido). Sobrou `/api/tema`, público de propósito.
+    - **Tirou `prebuild: ensure-ngrok` do build** (ele tentava `npm i -g ngrok` no build da Vercel); virou `npm run dev:tunnel`, manual.
+    - **Trocou o fallback `http://localhost:3001` por `/api`** em `backend-client.ts`, e removeu o `rewrites()` do `next.config.ts`.
+    - **Middleware não roda mais em `/api/**`** (a API autentica por Bearer; o refresh de sessão só adicionava latência).
+    - **Headers de segurança** no `next.config.ts`: `frame-ancestors 'none'` + `X-Frame-Options` (o link público `/proposta/[id]` circula por WhatsApp e é alvo de clickjacking), `nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` (o token do convite vive na URL e vazaria no `Referer`) e `Permissions-Policy` com **`camera=(self)`** — não aperte esse valor sem lembrar do scanner de código de barras (`@zxing`) em `/empresario/produtos`.
+    - **`npm audit`**: highs de produção zerados com `npm audit fix` + upgrade controlado de minor do Next (16.1.6 → 16.3.1). Restam 2 *moderate* do `uuid` interno do `exceljs`, cuja correção exigiria voltar o exceljs pra 3.x (breaking) — não explorável aqui, já que o parâmetro `buf` do uuid nunca é usado pelo caminho do exceljs.
+
+53. 🔴 **Corrigido em 16/08/2026 — exportação XLSX devolvia 500 para vários títulos.** O Excel proíbe `* ? : \ / [ ]` em nome de aba e o `exceljs` **lança** em vez de sanitizar; o código passava `titulo.slice(0, 31)` direto. Ou seja: **qualquer cotação com colchete, dois-pontos ou barra no título** (as `[TESTE]` do seed, "Compra 12/08", "Compra: mensal") quebrava o export. Bug herdado do NestJS, encontrado pelo smoke E2E. Agora passa por `nomeAbaExcel` (`src/server/cotacoes/excel-sheet-name.ts`), pura e com teste; validado gerando e **reabrindo** o buffer com exceljs usando um título real problemático. Se mexer no nome da aba, lembre: 31 caracteres, sem os proibidos, sem apóstrofo nas pontas, nunca vazio.
+
 ## O que NÃO fazer
 
 - Não usar `git commit --no-verify` ou pular hooks.
@@ -287,4 +313,8 @@ Confirmados por leitura direta do código (não são só achados de heurística)
 - Não apontar `<img>` direto pra `public/logos/` — use `<Logo>` de `src/components/brand/logo.tsx`. Em superfície de fundo escuro fixo (não segue o tema), passe `textClassName="text-white!"` (ver gotcha #44).
 - Não classificar rota por `startsWith` de texto no middleware — compare o segmento inteiro, senão `/fornecedores` vira `/fornecedor` (ver gotcha #45).
 - Não passar classe de `display` (`hidden`, `block`, `flex`...) no `className` do `Tooltip` — ele já tem `inline-flex` fixo e `cn()` aqui não faz merge; envolva com outro elemento (ver gotcha #48).
+- Não colocar regra de negócio em `src/app/api/**/route.ts` — o handler faz auth + validação e delega para `src/server/<domínio>` (ver gotcha #52).
+- Não mudar o formato do corpo de erro da API (`{ statusCode, message, error }`) — o frontend lê `message` (ver `src/server/http.ts`).
+- Não confiar em RLS nas rotas de `/api/**`: elas usam service role, que a bypassa. Cheque o dono explicitamente no service.
+- Não reintroduzir dependência de `localhost:3001` nem de segundo servidor — a aplicação é um projeto só.
 - Não commitar sem rodar `npm run lint`.
