@@ -297,6 +297,13 @@ Confirmados por leitura direta do código (não são só achados de heurística)
 
 53. 🔴 **Corrigido em 16/08/2026 — exportação XLSX devolvia 500 para vários títulos.** O Excel proíbe `* ? : \ / [ ]` em nome de aba e o `exceljs` **lança** em vez de sanitizar; o código passava `titulo.slice(0, 31)` direto. Ou seja: **qualquer cotação com colchete, dois-pontos ou barra no título** (as `[TESTE]` do seed, "Compra 12/08", "Compra: mensal") quebrava o export. Bug herdado do NestJS, encontrado pelo smoke E2E. Agora passa por `nomeAbaExcel` (`src/server/cotacoes/excel-sheet-name.ts`), pura e com teste; validado gerando e **reabrindo** o buffer com exceljs usando um título real problemático. Se mexer no nome da aba, lembre: 31 caracteres, sem os proibidos, sem apóstrofo nas pontas, nunca vazio.
 
+54. 🔴 **Erros do primeiro deploy na Vercel e como foram achados (16/08/2026).** O build ficava `Ready`, mas **todo o domínio devolvia 404** (`x-vercel-error: NOT_FOUND`, inclusive `/`). Duas causas, nenhuma no código:
+    - **`framework: null` no projeto Vercel.** O projeto foi criado em 2024 e nunca teve o framework detectado; sem `nextjs`, a Vercel trata o output como estático e não roteia nada para as funções — o build "passa" e o site inteiro é 404. Corrigido via API (`PATCH /v9/projects/{id}` com `{"framework":"nextjs"}`) + redeploy. **Se um deploy verde servir 404 em tudo, cheque o framework antes de suspeitar do código.**
+    - **Zero variáveis de ambiente no projeto.** `vercel env ls` devolvia "No Environment Variables found" — a app subia sem Supabase. As 5 (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_API_URL=/api`) foram criadas em Production/Preview/Development. **Variável nova só vale em deployment novo** — sempre redeploy depois de mexer nelas.
+    - ⚠️ `vercel env add` **trava com stdin em pipe** (pergunta "Store as sensitive?" interativamente). Para automatizar, use a API REST (`POST /v10/projects/{id}/env?upsert=true`).
+    - ⚠️ `vercel link` reescreve o `.gitignore` acrescentando `.env*` **sem** o `!.env.example`, e mexe no `.env.local`. Confira os dois depois de rodar.
+    - `ssoProtection: {"deploymentType":"all_except_custom_domains"}` é o arranjo correto aqui: protege URLs de deployment/preview e **libera o domínio de produção**. Sem isso, o link `/proposta/<token>` que circula por WhatsApp cai no SSO da Vercel e nenhum fornecedor responde cotação.
+
 ## O que NÃO fazer
 
 - Não usar `git commit --no-verify` ou pular hooks.
